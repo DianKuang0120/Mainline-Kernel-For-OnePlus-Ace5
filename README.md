@@ -1,6 +1,6 @@
 # OnePlus 13R / Ace 5 Mainline
 
-## Support matrix
+## Support
 
 | Feature              | Description             | State |
 |:---------------------|:------------------------|:-----:|
