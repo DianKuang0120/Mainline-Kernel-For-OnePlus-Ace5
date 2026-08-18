@@ -4247,6 +4247,13 @@
 					opp-peak-kBps = <14398437>;
 					qcom,opp-acd-level = <0x882a5ffd>;
 				};
+				
+				opp-903000000 {
+					opp-hz = /bits/ 64 <903000000>;
+					opp-level = <RPMH_REGULATOR_LEVEL_TURBO>;
+					opp-peak-kBps = <14398437>;
+					qcom,opp-acd-level = <0x882a5ffd>;
+				};				
 			};
 		};
 
