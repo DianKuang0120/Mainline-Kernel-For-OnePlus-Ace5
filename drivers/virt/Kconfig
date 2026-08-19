@@ -50,3 +50,5 @@ source "drivers/virt/acrn/Kconfig"
 endif
 
 source "drivers/virt/coco/Kconfig"
+
+source "drivers/virt/gunyah/Kconfig"
