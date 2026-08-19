@@ -87,6 +87,22 @@
 			};
 		};
 	};
+	
+    hypervisor {
+    	#address-cells = <2>;
+    	#size-cells = <0>;
+    	compatible = "gunyah-hypervisor";
+    	    
+    	gunyah-resource-mgr@0 {
+    		compatible = "gunyah-resource-manager";
+    
+    		reg = <0x831f2ab7 0x189a43c1>,
+    		      <0x831f2ab7 0x189a807c>;
+    
+    		interrupts = <GIC_SPI 928 IRQ_TYPE_LEVEL_HIGH 0>,
+                     <GIC_SPI 929 IRQ_TYPE_LEVEL_HIGH 0>;
+    	};
+    };
 
 	sound {
 		compatible = "qcom,sm8650-sndcard", "qcom,sm8450-sndcard";
