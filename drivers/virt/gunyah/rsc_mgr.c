@@ -895,8 +895,8 @@ static int gunyah_rm_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	rm->irq_domain = irq_domain_add_hierarchy(parent_irq_domain, 0, 0,
-						  pdev->dev.of_node,
+	rm->irq_domain = irq_domain_create_hierarchy(parent_irq_domain, 0, 0,
+						  dev_fwnode(&pdev->dev),
 						  &gunyah_rm_irq_domain_ops,
 						  NULL);
 	if (!rm->irq_domain) {
@@ -936,7 +936,7 @@ MODULE_DEVICE_TABLE(of, gunyah_rm_of_match);
 
 static struct platform_driver gunyah_rm_driver = {
 	.probe = gunyah_rm_probe,
-	.remove_new = gunyah_rm_remove,
+	.remove = gunyah_rm_remove,
 	.driver = {
 		.name = "gunyah_rsc_mgr",
 		.of_match_table = gunyah_rm_of_match,

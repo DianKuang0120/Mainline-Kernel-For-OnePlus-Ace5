@@ -123,12 +123,12 @@ static long gunyah_irqfd_bind(struct gunyah_vm_function_instance *f)
 	f->data = irqfd;
 
 	fd = fdget(args->fd);
-	if (!fd.file) {
+	if (!fd_file(fd)) {
 		kfree(irqfd);
 		return -EBADF;
 	}
 
-	irqfd->ctx = eventfd_ctx_fileget(fd.file);
+	irqfd->ctx = eventfd_ctx_fileget(fd_file(fd));
 	if (IS_ERR(irqfd->ctx)) {
 		r = PTR_ERR(irqfd->ctx);
 		goto err_fdput;
@@ -150,7 +150,7 @@ static long gunyah_irqfd_bind(struct gunyah_vm_function_instance *f)
 	if (r)
 		goto err_ctx;
 
-	events = vfs_poll(fd.file, &irqfd->pt);
+	events = vfs_poll(fd_file(fd), &irqfd->pt);
 	if (events & EPOLLIN)
 		pr_warn("Premature injection of interrupt\n");
 	fdput(fd);
