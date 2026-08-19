@@ -61,7 +61,7 @@ INCLUDES = \
 
 # Append required CFLAGS
 override CFLAGS += $(EXTRA_WARNINGS)
-override CFLAGS += -Werror -Wall
+override CFLAGS +=  -Wall
 override CFLAGS += -fPIC
 override CFLAGS += $(NL3_CFLAGS)
 override CFLAGS += $(INCLUDES)

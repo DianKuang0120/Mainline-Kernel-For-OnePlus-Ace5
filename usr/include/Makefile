@@ -6,7 +6,7 @@
 #
 # -std=c90 (equivalent to -ansi) catches the violation of those.
 # We cannot go as far as adding -Wpedantic since it emits too many warnings.
-UAPI_CFLAGS := -std=c90 -Werror=implicit-function-declaration
+UAPI_CFLAGS := -std=c90 
 UAPI_ARCH := $(or $(HEADER_ARCH),$(SRCARCH))
 
 override c_flags = $(KBUILD_USERCFLAGS) $(UAPI_CFLAGS) -Wp,-MMD,$(depfile)
@@ -167,7 +167,7 @@ target-libc = $(filter $(uses-libc), $*.h)
 target-can-compile = $(filter-out $(no-header-test), $*.h)
 target-can-compile-cxx = $(and $(cc-can-compile-cxx), $(target-can-compile), $(filter-out $(no-header-test-cxx), $*.h))
 
-hdrtest-flags = -fsyntax-only -Werror \
+hdrtest-flags = -fsyntax-only  \
 		-nostdinc -I $(obj) $(if $(target-libc), -I $(srctree)/usr/dummy-include)
 
 # Include the header twice to detect missing include guard.

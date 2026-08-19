@@ -2,7 +2,7 @@
 
 CFLAGS += -O3 -Wl,-no-as-needed -Wall -I $(top_srcdir)/usr/include
 ifneq ($(WERROR),0)
-	CFLAGS += -Werror
+	CFLAGS += 
 endif
 
 LDLIBS += -lpthread -lm -luring

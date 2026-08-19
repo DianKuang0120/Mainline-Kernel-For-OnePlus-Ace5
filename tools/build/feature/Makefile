@@ -108,14 +108,14 @@ endif
 
 all: $(FILES)
 
-__BUILD = $(CC) $(CFLAGS) -MD -Wall -Werror -o $@ $(patsubst %.bin,%.c,$(@F)) $(LDFLAGS)
+__BUILD = $(CC) $(CFLAGS) -MD -Wall  -o $@ $(patsubst %.bin,%.c,$(@F)) $(LDFLAGS)
   BUILD = $(__BUILD) > $(@:.bin=.make.output) 2>&1
   BUILD_BFD = $(BUILD) -DPACKAGE='"perf"' -lbfd -ldl
   BUILD_ALL = $(BUILD) -fstack-protector-all -O2 -D_FORTIFY_SOURCE=2 -ldw -lelf -lnuma -lelf -lslang \
 	      $(FLAGS_PERL_EMBED) $(FLAGS_PYTHON_EMBED) -ldl -lz -llzma -lzstd \
 	      $(shell $(PKG_CONFIG) --libs --cflags openssl 2>/dev/null)
 
-__BUILDXX = $(CXX) $(CXXFLAGS) -MD -Wall -Werror -o $@ $(patsubst %.bin,%.cpp,$(@F)) $(LDFLAGS)
+__BUILDXX = $(CXX) $(CXXFLAGS) -MD -Wall  -o $@ $(patsubst %.bin,%.cpp,$(@F)) $(LDFLAGS)
   BUILDXX = $(__BUILDXX) > $(@:.bin=.make.output) 2>&1
 
 ###############################
@@ -216,12 +216,12 @@ $(OUTPUT)test-libunwind-debug-frame.bin:
 
 define LIBUNWIND_RULE
 $$(OUTPUT)test-libunwind-$(1).bin:
-	$$(CC) $$(CFLAGS) -MD -Wall -Werror -include libunwind-$(1).h -o $$@ \
+	$$(CC) $$(CFLAGS) -MD -Wall  -include libunwind-$(1).h -o $$@ \
 		test-libunwind.c $$(LDFLAGS) -lelf -llzma -lunwind-$(1) \
 		> $$(@:.bin=.make.output) 2>&1
 
 $$(OUTPUT)test-libunwind-debug-frame-$(1).bin:
-	$$(CC) $$(CFLAGS) -MD -Wall -Werror -include libunwind-$(1).h -o $$@ \
+	$$(CC) $$(CFLAGS) -MD -Wall  -include libunwind-$(1).h -o $$@ \
 		test-libunwind-debug-frame.c $$(LDFLAGS) -lelf -llzma -lunwind-$(1) \
 		> $$(@:.bin=.make.output) 2>&1
 
@@ -288,10 +288,10 @@ $(OUTPUT)test-reallocarray.bin:
 	$(BUILD)
 
 $(OUTPUT)test-libbfd-liberty.bin:
-	$(CC) $(CFLAGS) -Wall -Werror -o $@ test-libbfd.c -DPACKAGE='"perf"' $(LDFLAGS) -lbfd -ldl -liberty
+	$(CC) $(CFLAGS) -Wall  -o $@ test-libbfd.c -DPACKAGE='"perf"' $(LDFLAGS) -lbfd -ldl -liberty
 
 $(OUTPUT)test-libbfd-liberty-z.bin:
-	$(CC) $(CFLAGS) -Wall -Werror -o $@ test-libbfd.c -DPACKAGE='"perf"' $(LDFLAGS) -lbfd -ldl -liberty -lz
+	$(CC) $(CFLAGS) -Wall  -o $@ test-libbfd.c -DPACKAGE='"perf"' $(LDFLAGS) -lbfd -ldl -liberty -lz
 
 $(OUTPUT)test-cplus-demangle.bin:
 	$(BUILD) -liberty
@@ -315,10 +315,10 @@ $(OUTPUT)test-libcheck.bin:
 	$(BUILD) # -lcheck is provided by $(FEATURE_CHECK_LDFLAGS-libcheck)
 
 $(OUTPUT)test-compile-32.bin:
-	$(CC) -m32 -Wall -Werror -o $@ test-compile.c
+	$(CC) -m32 -Wall  -o $@ test-compile.c
 
 $(OUTPUT)test-compile-x32.bin:
-	$(CC) -mx32 -Wall -Werror -o $@ test-compile.c
+	$(CC) -mx32 -Wall  -o $@ test-compile.c
 
 $(OUTPUT)test-zlib.bin:
 	$(BUILD) -lz

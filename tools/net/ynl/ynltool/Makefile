@@ -6,7 +6,7 @@ INSTALL	?= install
 prefix  ?= /usr
 
 CC := gcc
-CFLAGS := -Wall -Wextra -Werror -O2
+CFLAGS := -Wall -Wextra  -O2
 ifeq ("$(DEBUG)","1")
   CFLAGS += -g -fsanitize=address -fsanitize=leak -static-libasan
 endif

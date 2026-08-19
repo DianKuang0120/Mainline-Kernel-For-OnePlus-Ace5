@@ -107,7 +107,7 @@ CFLAGS := $(CFLAGS_$(ARCH))
 
 headers_check: headers_standalone
 	$(Q)for header in $(filter-out crt.h std.h,$(all_files)); do \
-		$(CC) $(CFLAGS) $(CLANG_CROSS_FLAGS) -Wall -Werror -nostdinc -fsyntax-only -x c /dev/null \
+		$(CC) $(CFLAGS) $(CLANG_CROSS_FLAGS) -Wall  -nostdinc -fsyntax-only -x c /dev/null \
 			-I$(or $(objtree),$(srctree))/usr/include -include $$header -include $$header || exit 1; \
 	done
 

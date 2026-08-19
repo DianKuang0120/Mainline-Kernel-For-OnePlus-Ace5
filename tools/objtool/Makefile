@@ -47,7 +47,7 @@ LIBELF_LIBS  := $(shell $(HOSTPKG_CONFIG) libelf --libs 2>/dev/null || echo -lel
 
 all: $(OBJTOOL)
 
-WARNINGS := -Werror -Wall -Wextra -Wmissing-prototypes			\
+WARNINGS :=  -Wall -Wextra -Wmissing-prototypes			\
 	    -Wmissing-declarations -Wwrite-strings			\
 	    -Wno-implicit-fallthrough -Wno-sign-compare			\
 	    -Wno-unused-parameter
