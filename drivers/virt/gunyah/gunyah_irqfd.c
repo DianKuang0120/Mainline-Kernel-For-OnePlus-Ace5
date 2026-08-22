@@ -93,11 +93,6 @@ static bool gunyah_irqfd_populate(struct gunyah_vm_resource_ticket *ticket,
 static void gunyah_irqfd_unpopulate(struct gunyah_vm_resource_ticket *ticket,
 				    struct gunyah_resource *ghrsc)
 {
-	struct gunyah_irqfd *irqfd =
-		container_of(ticket, struct gunyah_irqfd, ticket);
-	u64 cnt;
-
-	eventfd_ctx_remove_wait_queue(irqfd->ctx, &irqfd->wait, &cnt);
 }
 
 static long gunyah_irqfd_bind(struct gunyah_vm_function_instance *f)
@@ -167,7 +162,9 @@ err_fdput:
 static void gunyah_irqfd_unbind(struct gunyah_vm_function_instance *f)
 {
 	struct gunyah_irqfd *irqfd = f->data;
+	u64 cnt;
 
+	eventfd_ctx_remove_wait_queue(irqfd->ctx, &irqfd->wait, &cnt);
 	gunyah_vm_remove_resource_ticket(irqfd->f->ghvm, &irqfd->ticket);
 	eventfd_ctx_put(irqfd->ctx);
 	kfree(irqfd);

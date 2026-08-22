@@ -3,6 +3,8 @@
  * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
+#include <linux/error-injection.h>
+
 #include "rsc_mgr.h"
 
 /* Message IDs: Memory Management */
@@ -20,9 +22,9 @@
 #define GUNYAH_RM_RPC_VM_RESET			0x56000006
 #define GUNYAH_RM_RPC_VM_CONFIG_IMAGE		0x56000009
 #define GUNYAH_RM_RPC_VM_INIT			0x5600000B
-#define GUNYAH_RM_RPC_VM_SET_BOOT_CONTEXT	0x5600000C
 #define GUNYAH_RM_RPC_VM_GET_HYP_RESOURCES	0x56000020
 #define GUNYAH_RM_RPC_VM_GET_VMID		0x56000024
+#define GUNYAH_RM_RPC_VM_SET_BOOT_CONTEXT	0x56000031
 #define GUNYAH_RM_RPC_VM_SET_DEMAND_PAGING	0x56000033
 #define GUNYAH_RM_RPC_VM_SET_ADDRESS_LAYOUT	0x56000034
 /* clang-format on */
@@ -46,7 +48,8 @@ struct gunyah_rm_mem_share_req_header {
 } __packed;
 
 struct gunyah_rm_mem_share_req_acl_section {
-	__le32 n_entries;
+	__le16 n_entries;
+	__le16 _padding;
 	struct gunyah_rm_mem_acl_entry entries[];
 } __packed;
 
@@ -286,6 +289,7 @@ int gunyah_rm_mem_share(struct gunyah_rm *rm, struct gunyah_rm_mem_parcel *p)
 
 	return ret;
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_mem_share, ERRNO);
 
 /**
  * gunyah_rm_mem_reclaim() - Reclaim a memory parcel
@@ -310,6 +314,7 @@ int gunyah_rm_mem_reclaim(struct gunyah_rm *rm,
 
 	return gunyah_rm_platform_post_mem_reclaim(rm, parcel);
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_mem_reclaim, ERRNO);
 
 /**
  * gunyah_rm_alloc_vmid() - Allocate a new VM in Gunyah. Returns the VM identifier.
@@ -342,6 +347,7 @@ int gunyah_rm_alloc_vmid(struct gunyah_rm *rm, u16 vmid)
 
 	return ret;
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_alloc_vmid, ERRNO);
 
 /**
  * gunyah_rm_dealloc_vmid() - Dispose of a VMID
@@ -353,6 +359,7 @@ int gunyah_rm_dealloc_vmid(struct gunyah_rm *rm, u16 vmid)
 	return gunyah_rm_common_vmid_call(rm, GUNYAH_RM_RPC_VM_DEALLOC_VMID,
 					  vmid);
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_dealloc_vmid, ERRNO);
 
 /**
  * gunyah_rm_vm_reset() - Reset a VM's resources
@@ -367,6 +374,7 @@ int gunyah_rm_vm_reset(struct gunyah_rm *rm, u16 vmid)
 {
 	return gunyah_rm_common_vmid_call(rm, GUNYAH_RM_RPC_VM_RESET, vmid);
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_vm_reset, ERRNO);
 
 /**
  * gunyah_rm_vm_start() - Move a VM into "ready to run" state
@@ -381,6 +389,7 @@ int gunyah_rm_vm_start(struct gunyah_rm *rm, u16 vmid)
 {
 	return gunyah_rm_common_vmid_call(rm, GUNYAH_RM_RPC_VM_START, vmid);
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_vm_start, ERRNO);
 
 /**
  * gunyah_rm_vm_stop() - Send a request to Resource Manager VM to forcibly stop a VM.
@@ -398,6 +407,7 @@ int gunyah_rm_vm_stop(struct gunyah_rm *rm, u16 vmid)
 	return gunyah_rm_call(rm, GUNYAH_RM_RPC_VM_STOP, &req_payload,
 			      sizeof(req_payload), NULL, NULL);
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_vm_stop, ERRNO);
 
 /**
  * gunyah_rm_vm_configure() - Prepare a VM to start and provide the common
@@ -432,6 +442,7 @@ int gunyah_rm_vm_configure(struct gunyah_rm *rm, u16 vmid,
 	return gunyah_rm_call(rm, GUNYAH_RM_RPC_VM_CONFIG_IMAGE, &req_payload,
 			      sizeof(req_payload), NULL, NULL);
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_vm_configure, ERRNO);
 
 /**
  * gunyah_rm_vm_init() - Move the VM to initialized state.
@@ -444,6 +455,7 @@ int gunyah_rm_vm_init(struct gunyah_rm *rm, u16 vmid)
 {
 	return gunyah_rm_common_vmid_call(rm, GUNYAH_RM_RPC_VM_INIT, vmid);
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_vm_init, ERRNO);
 
 /**
  * gunyah_rm_vm_set_boot_context() - set the initial boot context of the primary vCPU
@@ -466,6 +478,7 @@ int gunyah_rm_vm_set_boot_context(struct gunyah_rm *rm, u16 vmid, u8 reg_set,
 	return gunyah_rm_call(rm, GUNYAH_RM_RPC_VM_SET_BOOT_CONTEXT,
 			      &req_payload, sizeof(req_payload), NULL, NULL);
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_vm_set_boot_context, ERRNO);
 
 /**
  * gunyah_rm_get_hyp_resources() - Retrieve hypervisor resources (capabilities) associated with a VM
@@ -503,6 +516,7 @@ int gunyah_rm_get_hyp_resources(struct gunyah_rm *rm, u16 vmid,
 	*resources = resp;
 	return 0;
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_get_hyp_resources, ERRNO);
 
 /**
  * gunyah_rm_get_vmid() - Retrieve VMID of this virtual machine
@@ -561,6 +575,7 @@ int gunyah_rm_vm_set_demand_paging(struct gunyah_rm *rm, u16 vmid, u32 count,
 	return gunyah_rm_call(rm, GUNYAH_RM_RPC_VM_SET_DEMAND_PAGING, req,
 			      req_size, NULL, NULL);
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_vm_set_demand_paging, ERRNO);
 
 /**
  * gunyah_rm_vm_set_address_layout() - Set the start address of images
@@ -584,3 +599,4 @@ int gunyah_rm_vm_set_address_layout(struct gunyah_rm *rm, u16 vmid,
 	return gunyah_rm_call(rm, GUNYAH_RM_RPC_VM_SET_ADDRESS_LAYOUT, &req,
 			      sizeof(req), NULL, NULL);
 }
+ALLOW_ERROR_INJECTION(gunyah_rm_vm_set_address_layout, ERRNO);

@@ -232,12 +232,12 @@ out:
 }
 EXPORT_SYMBOL_GPL(gunyah_vm_add_resource_ticket);
 
-void gunyah_vm_remove_resource_ticket(struct gunyah_vm *ghvm,
-				      struct gunyah_vm_resource_ticket *ticket)
+static void
+__gunyah_vm_remove_resource_ticket(struct gunyah_vm *ghvm,
+				   struct gunyah_vm_resource_ticket *ticket)
 {
 	struct gunyah_resource *ghrsc, *iter;
 
-	mutex_lock(&ghvm->resources_lock);
 	list_for_each_entry_safe(ghrsc, iter, &ticket->resources, list) {
 		ticket->unpopulate(ticket, ghrsc);
 		list_move(&ghrsc->list, &ghvm->resources);
@@ -245,6 +245,13 @@ void gunyah_vm_remove_resource_ticket(struct gunyah_vm *ghvm,
 
 	module_put(ticket->owner);
 	list_del(&ticket->vm_list);
+}
+
+void gunyah_vm_remove_resource_ticket(struct gunyah_vm *ghvm,
+				      struct gunyah_vm_resource_ticket *ticket)
+{
+	mutex_lock(&ghvm->resources_lock);
+	__gunyah_vm_remove_resource_ticket(ghvm, ticket);
 	mutex_unlock(&ghvm->resources_lock);
 }
 EXPORT_SYMBOL_GPL(gunyah_vm_remove_resource_ticket);
@@ -285,7 +292,7 @@ static void gunyah_vm_clean_resources(struct gunyah_vm *ghvm)
 		list_for_each_entry_safe(ticket, titer, &ghvm->resource_tickets,
 					 vm_list) {
 			dev_warn(ghvm->parent, "  %pS\n", ticket->populate);
-			gunyah_vm_remove_resource_ticket(ghvm, ticket);
+			__gunyah_vm_remove_resource_ticket(ghvm, ticket);
 		}
 	}
 
@@ -623,10 +630,6 @@ static int gunyah_vm_start(struct gunyah_vm *ghvm)
 
 	ghvm->dtb.parcel_start = ghvm->dtb.config.guest_phys_addr >> PAGE_SHIFT;
 	ghvm->dtb.parcel_pages = ghvm->dtb.config.size >> PAGE_SHIFT;
-	/* RM requires the DTB parcel to be lent to guard against malicious
-	 * modifications while starting VM. Force it so.
-	 */
-	ghvm->dtb.parcel.n_acl_entries = 1;
 	ret = gunyah_gmem_share_parcel(ghvm, &ghvm->dtb.parcel,
 				       &ghvm->dtb.parcel_start,
 				       &ghvm->dtb.parcel_pages);
@@ -698,13 +701,23 @@ static int gunyah_vm_start(struct gunyah_vm *ghvm)
 		gunyah_vm_add_resource(ghvm, ghrsc);
 	}
 
+	ret = gunyah_vm_parcel_to_paged(ghvm, &ghvm->dtb.parcel,
+					ghvm->dtb.parcel_start,
+					ghvm->dtb.parcel_pages);
+	if (ret)
+		goto err;
+
 	ret = gunyah_rm_vm_start(ghvm->rm, ghvm->vmid);
 	if (ret) {
+		/**
+		 * need to rollback parcel_to_paged because RM is still
+		 * tracking the parcel
+		 */
+		gunyah_vm_mm_erase_range(ghvm, ghvm->dtb.parcel_start,
+					 ghvm->dtb.parcel_pages);
 		dev_warn(ghvm->parent, "Failed to start VM: %d\n", ret);
 		goto err;
 	}
-
-	WARN_ON(gunyah_vm_parcel_to_paged(ghvm, &ghvm->dtb.parcel, ghvm->dtb.parcel_start, ghvm->dtb.parcel_pages));
 
 	ghvm->vm_status = GUNYAH_RM_VM_STATUS_RUNNING;
 	up_write(&ghvm->status_lock);
@@ -729,11 +742,9 @@ static int gunyah_vm_ensure_started(struct gunyah_vm *ghvm)
 		ret = gunyah_vm_start(ghvm);
 		if (ret)
 			return ret;
-		/** gunyah_vm_start() is guaranteed to bring status out of
-		 * GUNYAH_RM_VM_STATUS_LOAD, thus infinitely recursive call is not
-		 * possible
-		 */
-		return gunyah_vm_ensure_started(ghvm);
+		ret = down_read_interruptible(&ghvm->status_lock);
+		if (ret)
+			return ret;
 	}
 
 	/* Unlikely because VM is typically running */
@@ -833,7 +844,9 @@ static void _gunyah_vm_put(struct kref *kref)
 	if (ghvm->vm_status == GUNYAH_RM_VM_STATUS_RUNNING)
 		gunyah_vm_stop(ghvm);
 
-	if (ghvm->vm_status == GUNYAH_RM_VM_STATUS_LOAD) {
+	if (ghvm->vm_status == GUNYAH_RM_VM_STATUS_LOAD ||
+	    ghvm->vm_status == GUNYAH_RM_VM_STATUS_READY ||
+	    ghvm->vm_status == GUNYAH_RM_VM_STATUS_INIT_FAILED) {
 		ret = gunyah_gmem_reclaim_parcel(ghvm, &ghvm->dtb.parcel,
 						 ghvm->dtb.parcel_start,
 						 ghvm->dtb.parcel_pages);
@@ -859,23 +872,27 @@ static void _gunyah_vm_put(struct kref *kref)
 	 */
 	WARN_ON(gunyah_vm_reclaim_range(ghvm, 0, U64_MAX));
 
+	/* clang-format off */
 	gunyah_vm_remove_resource_ticket(ghvm, &ghvm->addrspace_ticket);
 	gunyah_vm_remove_resource_ticket(ghvm, &ghvm->host_shared_extent_ticket);
 	gunyah_vm_remove_resource_ticket(ghvm, &ghvm->host_private_extent_ticket);
 	gunyah_vm_remove_resource_ticket(ghvm, &ghvm->guest_shared_extent_ticket);
 	gunyah_vm_remove_resource_ticket(ghvm, &ghvm->guest_private_extent_ticket);
+	/* clang-format on */
 
 	gunyah_vm_clean_resources(ghvm);
 
-	if (ghvm->vm_status != GUNYAH_RM_VM_STATUS_NO_STATE &&
-	    ghvm->vm_status != GUNYAH_RM_VM_STATUS_LOAD &&
-	    ghvm->vm_status != GUNYAH_RM_VM_STATUS_RESET) {
+	if (ghvm->vm_status == GUNYAH_RM_VM_STATUS_EXITED ||
+	    ghvm->vm_status == GUNYAH_RM_VM_STATUS_READY ||
+	    ghvm->vm_status == GUNYAH_RM_VM_STATUS_INIT_FAILED) {
 		ret = gunyah_rm_vm_reset(ghvm->rm, ghvm->vmid);
-		if (ret)
-			dev_err(ghvm->parent, "Failed to reset the vm: %d\n",
-				ret);
-		wait_event(ghvm->vm_status_wait,
-			   ghvm->vm_status == GUNYAH_RM_VM_STATUS_RESET);
+		/* clang-format off */
+		if (!ret)
+			wait_event(ghvm->vm_status_wait,
+				   ghvm->vm_status == GUNYAH_RM_VM_STATUS_RESET);
+		else
+			dev_err(ghvm->parent, "Failed to reset the vm: %d\n",ret);
+		/* clang-format on */
 	}
 
 	WARN_ON(!mtree_empty(&ghvm->mm));

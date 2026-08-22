@@ -121,7 +121,7 @@ gunyah_handle_mmio(struct gunyah_vcpu *vcpu, unsigned long resume_data[3],
 		len = sizeof(u64);
 
 	ret = gunyah_gmem_demand_page(vcpu->ghvm, addr,
-				     vcpu->vcpu_run->mmio.is_write);
+				      vcpu->vcpu_run->mmio.is_write);
 	if (!ret || ret == -EAGAIN) {
 		resume_data[1] = GUNYAH_ADDRSPACE_VMMIO_ACTION_RETRY;
 		return true;
@@ -142,7 +142,8 @@ gunyah_handle_mmio(struct gunyah_vcpu *vcpu, unsigned long resume_data[3],
 		vcpu->state = GUNYAH_VCPU_RUN_STATE_MMIO_WRITE;
 	}
 
-	vcpu->vcpu_run->mmio.resume_action = 0;
+	/* Assume userspace is okay and handles the access due to existing userspace */
+	vcpu->vcpu_run->mmio.resume_action = GUNYAH_VCPU_RESUME_HANDLED;
 	vcpu->mmio_addr = vcpu->vcpu_run->mmio.phys_addr = addr;
 	vcpu->vcpu_run->mmio.len = len;
 	vcpu->vcpu_run->exit_reason = GUNYAH_VCPU_EXIT_MMIO;
@@ -153,6 +154,8 @@ gunyah_handle_mmio(struct gunyah_vcpu *vcpu, unsigned long resume_data[3],
 static int gunyah_handle_mmio_resume(struct gunyah_vcpu *vcpu,
 				     unsigned long resume_data[3])
 {
+	bool write = vcpu->state == GUNYAH_VCPU_RUN_STATE_MMIO_WRITE;
+
 	switch (vcpu->vcpu_run->mmio.resume_action) {
 	case GUNYAH_VCPU_RESUME_HANDLED:
 		if (vcpu->state == GUNYAH_VCPU_RUN_STATE_MMIO_READ) {
@@ -168,8 +171,8 @@ static int gunyah_handle_mmio_resume(struct gunyah_vcpu *vcpu,
 		resume_data[1] = GUNYAH_ADDRSPACE_VMMIO_ACTION_FAULT;
 		break;
 	case GUNYAH_VCPU_RESUME_RETRY:
-		gunyah_gmem_demand_page(vcpu->ghvm, vcpu->mmio_addr,
-					vcpu->state == GUNYAH_VCPU_RUN_STATE_MMIO_WRITE);
+		/* userspace probably added a memory binding */
+		gunyah_gmem_demand_page(vcpu->ghvm, vcpu->mmio_addr, write);
 		resume_data[1] = GUNYAH_ADDRSPACE_VMMIO_ACTION_RETRY;
 		break;
 	default:
@@ -338,7 +341,7 @@ static int gunyah_vcpu_run(struct gunyah_vcpu *vcpu)
 				break;
 			case GUNYAH_VCPU_ADDRSPACE_PAGE_FAULT:
 				if (!gunyah_handle_page_fault(vcpu,
-							     &vcpu_run_resp))
+							      &vcpu_run_resp))
 					goto out;
 				break;
 			default:
@@ -395,11 +398,12 @@ static int gunyah_vcpu_release(struct inode *inode, struct file *filp)
 static vm_fault_t gunyah_vcpu_fault(struct vm_fault *vmf)
 {
 	struct gunyah_vcpu *vcpu = vmf->vma->vm_file->private_data;
-	struct page *page = NULL;
+	struct page *page;
 
-	if (vmf->pgoff == 0)
-		page = virt_to_page(vcpu->vcpu_run);
+	if (vmf->pgoff)
+		return VM_FAULT_SIGBUS;
 
+	page = virt_to_page(vcpu->vcpu_run);
 	get_page(page);
 	vmf->page = page;
 	return 0;
@@ -439,13 +443,14 @@ static bool gunyah_vcpu_populate(struct gunyah_vm_resource_ticket *ticket,
 	}
 
 	vcpu->rsc = ghrsc;
-	init_completion(&vcpu->ready);
 
 	ret = request_irq(vcpu->rsc->irq, gunyah_vcpu_irq_handler,
 			  IRQF_TRIGGER_RISING, "gunyah_vcpu", vcpu);
-	if (ret)
+	if (ret) {
 		pr_warn("Failed to request vcpu irq %d: %d", vcpu->rsc->irq,
 			ret);
+		goto out;
+	}
 
 	enable_irq_wake(vcpu->rsc->irq);
 
@@ -489,6 +494,7 @@ static long gunyah_vcpu_bind(struct gunyah_vm_function_instance *f)
 	f->data = vcpu;
 	mutex_init(&vcpu->run_lock);
 	kref_init(&vcpu->kref);
+	init_completion(&vcpu->ready);
 
 	page = alloc_page(GFP_KERNEL | __GFP_ZERO);
 	if (!page) {

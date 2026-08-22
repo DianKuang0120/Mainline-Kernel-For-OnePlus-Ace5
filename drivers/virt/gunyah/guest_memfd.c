@@ -26,15 +26,15 @@
  * @flags: Access flags for the binding
  * @nr: Number of pages covered by this binding
  */
-struct gunyah_gmem_inode {
-        unsigned long flags;
-        struct list_head bindings;
+ struct gunyah_gmem_inode {
+	unsigned long flags;
+	struct list_head bindings;
 };
 
 static inline struct gunyah_gmem_inode *
 gunyah_gmem_inode(struct inode *inode)
 {
-        return inode->i_private;
+	return inode->i_private;
 }
  
 struct gunyah_gmem_binding {
@@ -77,7 +77,7 @@ static struct folio *gunyah_gmem_get_huge_folio(struct inode *inode,
 {
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	unsigned long huge_index = round_down(index, HPAGE_PMD_NR);
-	unsigned long flags = gunyah_gmem_inode(inode)->flags;
+	unsigned long flags = (unsigned long)inode->i_private;
 	struct address_space *mapping = inode->i_mapping;
 	gfp_t gfp = mapping_gfp_mask(mapping);
 	struct folio *folio;
@@ -156,14 +156,14 @@ static int gunyah_gmem_launder_folio(struct folio *folio)
 
 	filemap_invalidate_lock_shared(mapping);
 	list_for_each_entry(b,
-                    &gunyah_gmem_inode(mapping->host)->bindings,
-                    i_entry) {
+		    &gunyah_gmem_inode(mapping->host)->bindings,
+		    i_entry) {
 		/* if the mapping doesn't cover this folio: skip */
 		if (b->i_off > index || index > b->i_off + b->nr)
 			continue;
 
 		gfn = gunyah_off_to_gfn(b, index);
-		ret = gunyah_vm_reclaim_folio(b->ghvm, gfn);
+		ret = gunyah_vm_reclaim_folio(b->ghvm, gfn, folio);
 		if (WARN_RATELIMIT(ret, "failed to reclaim gfn: %08llx %d\n",
 				   gfn, ret))
 			break;
@@ -182,7 +182,7 @@ static vm_fault_t gunyah_gmem_host_fault(struct vm_fault *vmf)
 	if (!folio)
 		return VM_FAULT_SIGBUS;
 
-	/* If the folio is lent to a VM, try to reclim it */
+	/* If the folio is lent to a VM, try to reclaim it */
 	if (folio_test_private(folio) && gunyah_gmem_launder_folio(folio)) {
 		folio_unlock(folio);
 		folio_put(folio);
@@ -204,13 +204,24 @@ static int gunyah_gmem_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct address_space *const mapping = file->f_mapping;
 	struct gunyah_gmem_binding *b;
+	pgoff_t end_off;
 	int ret = 0;
 	u64 gfn, nr;
 
+	/* No support for private mappings to avoid COW.  */
+	if ((vma->vm_flags & (VM_SHARED | VM_MAYSHARE)) !=
+	    (VM_SHARED | VM_MAYSHARE)) {
+		return -EINVAL;
+	}
+
 	filemap_invalidate_lock_shared(mapping);
+	/**
+	 * userspace can only mmap if the folios covered by the requested
+	 * offset are not lent to the guest
+	 */
 	list_for_each_entry(b,
-                    &gunyah_gmem_inode(mapping->host)->bindings,
-                    i_entry) {
+		    &gunyah_gmem_inode(mapping->host)->bindings,
+		    i_entry) {
 		if (!gunyah_guest_mem_is_lend(b->ghvm, b->flags))
 			continue;
 
@@ -221,7 +232,8 @@ static int gunyah_gmem_mmap(struct file *file, struct vm_area_struct *vma)
 			continue;
 
 		gfn = gunyah_off_to_gfn(b, vma->vm_pgoff);
-		nr = gunyah_off_to_gfn(b, vma->vm_pgoff + vma_pages(vma)) - gfn;
+		end_off = max(vma->vm_pgoff + vma_pages(vma), b->i_off + b->nr);
+		nr = gunyah_off_to_gfn(b, end_off) - gfn;
 		ret = gunyah_vm_reclaim_range(b->ghvm, gfn, nr);
 		if (ret)
 			break;
@@ -327,14 +339,14 @@ static long gunyah_gmem_fallocate(struct file *file, int mode, loff_t offset,
 
 static int gunyah_gmem_release(struct inode *inode, struct file *file)
 {
-        struct gunyah_gmem_inode *gmi = gunyah_gmem_inode(inode);
+	struct gunyah_gmem_inode *gmi = gunyah_gmem_inode(inode);
 
-        BUG_ON(!list_empty(&gmi->bindings));
+	BUG_ON(!list_empty(&gmi->bindings));
 
-        kfree(gmi);
-        inode->i_private = NULL;
+	kfree(gmi);
+	inode->i_private = NULL;
 
-        return 0;
+	return 0;
 }
 
 static const struct file_operations gunyah_gmem_fops = {
@@ -390,13 +402,8 @@ int gunyah_guest_mem_create(struct gunyah_create_mem_args *args)
 	if (fd < 0)
 		return fd;
 
-	/*
-	 * Use the so called "secure" variant, which creates a unique inode
-	 * instead of reusing a single inode.  Each guest_memfd instance needs
-	 * its own inode to track the size, flags, etc.
-	 */
-	file = anon_inode_create_getfile(anon_name, &gunyah_gmem_fops, NULL,
-					 O_RDWR, NULL);
+	file = anon_inode_create_getfile(anon_name, &gunyah_gmem_fops,
+					 NULL, O_RDWR, NULL);
 	if (IS_ERR(file)) {
 		err = PTR_ERR(file);
 		goto err_fd;
@@ -405,36 +412,42 @@ int gunyah_guest_mem_create(struct gunyah_create_mem_args *args)
 	file->f_flags |= O_LARGEFILE;
 
 	inode = file->f_inode;
-    WARN_ON(file->f_mapping != inode->i_mapping);
 
-    gmi = kzalloc(sizeof(*gmi), GFP_KERNEL);
-    if (!gmi) {
-            err = -ENOMEM;
-            goto err_file;
-    }
+	WARN_ON(file->f_mapping != inode->i_mapping);
 
-    gmi->flags = args->flags;
-    INIT_LIST_HEAD(&gmi->bindings);
+	gmi = kzalloc(sizeof(*gmi), GFP_KERNEL);
+	if (!gmi) {
+		err = -ENOMEM;
+		goto err_file;
+	}
 
-    inode->i_private = gmi;
-    inode->i_mapping->a_ops = &gunyah_gmem_aops;
-    inode->i_mode |= S_IFREG;
-    inode->i_size = args->size;
-    mapping_set_gfp_mask(inode->i_mapping, GFP_HIGHUSER);
-    mapping_set_large_folios(inode->i_mapping);
-    mapping_set_unevictable(inode->i_mapping);
-    mapping_set_release_always(inode->i_mapping);
-	/* Unmovable mappings are supposed to be marked unevictable as well. */
+	gmi->flags = args->flags;
+	INIT_LIST_HEAD(&gmi->bindings);
+
+	inode->i_private = gmi;
+	inode->i_mapping->a_ops = &gunyah_gmem_aops;
+	inode->i_mode |= S_IFREG;
+	inode->i_size = args->size;
+
+	mapping_set_gfp_mask(inode->i_mapping, GFP_HIGHUSER);
+	mapping_set_large_folios(inode->i_mapping);
+	mapping_set_unevictable(inode->i_mapping);
+	mapping_set_release_always(inode->i_mapping);
+
 	WARN_ON_ONCE(!mapping_unevictable(inode->i_mapping));
 
-    fd_install(fd, file);
-    return fd;
-    
-    err_file:
-            fput(file);
-    err_fd:
-            put_unused_fd(fd);
-            return err;
+	fd_install(fd, file);
+
+	return fd;
+
+
+err_file:
+	fput(file);
+
+err_fd:
+	put_unused_fd(fd);
+
+	return err;
 }
 
 void gunyah_gmem_remove_binding(struct gunyah_gmem_binding *b)
@@ -448,8 +461,7 @@ void gunyah_gmem_remove_binding(struct gunyah_gmem_binding *b)
 
 static inline unsigned long gunyah_gmem_page_mask(struct file *file)
 {
-	unsigned long gmem_flags =
-        gunyah_gmem_inode(file_inode(file))->flags;
+	unsigned long gmem_flags = (unsigned long)file_inode(file)->i_private;
 
 	if (gmem_flags & GHMF_ALLOW_HUGEPAGE) {
 #if IS_ENABLED(CONFIG_TRANSPARENT_HUGEPAGE)
@@ -504,25 +516,25 @@ static int gunyah_gmem_trim_binding(struct gunyah_gmem_binding *b,
 			goto unlock;
 		gunyah_gmem_remove_binding(b);
 	} else if (start_delta && !end_delta) {
-		/* shrink the beginning */
-		ret = gunyah_vm_reclaim_range(ghvm, b->gfn,
-					      b->gfn + start_delta);
-		if (ret)
-			goto unlock;
-		mtree_erase(&ghvm->bindings, b->gfn);
-		b->gfn += start_delta;
-		b->i_off += start_delta;
-		b->nr -= start_delta;
-		ret = mtree_insert_range(&ghvm->bindings, b->gfn,
-					 b->gfn + b->nr - 1, b, GFP_KERNEL);
-	} else if (!start_delta && end_delta) {
-		/* Shrink the end */
-		ret = gunyah_vm_reclaim_range(ghvm, b->gfn + b->nr - end_delta,
+		/* keep the start */
+		ret = gunyah_vm_reclaim_range(ghvm, b->gfn + start_delta,
 					      b->gfn + b->nr);
 		if (ret)
 			goto unlock;
 		mtree_erase(&ghvm->bindings, b->gfn);
-		b->nr -= end_delta;
+		b->nr = start_delta;
+		ret = mtree_insert_range(&ghvm->bindings, b->gfn,
+					 b->gfn + b->nr - 1, b, GFP_KERNEL);
+	} else if (!start_delta && end_delta) {
+		/* keep the end */
+		ret = gunyah_vm_reclaim_range(ghvm, b->gfn,
+					      b->gfn + b->nr - end_delta);
+		if (ret)
+			goto unlock;
+		mtree_erase(&ghvm->bindings, b->gfn);
+		b->gfn += b->nr - end_delta;
+		b->i_off += b->nr - end_delta;
+		b->nr = end_delta;
 		ret = mtree_insert_range(&ghvm->bindings, b->gfn,
 					 b->gfn + b->nr - 1, b, GFP_KERNEL);
 	} else {
@@ -550,9 +562,7 @@ static int gunyah_gmem_remove_mapping(struct gunyah_vm *ghvm, struct file *file,
 
 	ret = -ENOENT;
 	filemap_invalidate_lock(inode->i_mapping);
-	list_for_each_entry(b,
-                    &gunyah_gmem_inode(inode)->bindings,
-                    i_entry) {
+	list_for_each_entry(b, &gunyah_gmem_inode(inode)->bindings, i_entry) {
 		if (b->ghvm != remove.ghvm || b->flags != remove.flags ||
 		    WARN_ON(b->file != remove.file))
 			continue;
@@ -573,8 +583,8 @@ static int gunyah_gmem_remove_mapping(struct gunyah_vm *ghvm, struct file *file,
 		 */
 		start_delta = remove.gfn - b->gfn;
 		if (remove.i_off - b->i_off != start_delta)
-			continue;
-		end_delta = remove.gfn + remove.nr - b->gfn - b->nr;
+			break;
+		end_delta = b->gfn + b->nr - remove.gfn - remove.nr;
 
 		ret = gunyah_gmem_trim_binding(b, start_delta, end_delta);
 		break;
@@ -584,7 +594,7 @@ static int gunyah_gmem_remove_mapping(struct gunyah_vm *ghvm, struct file *file,
 	return ret;
 }
 
-static bool gunyah_gmem_binding_allowed_overlap(struct gunyah_gmem_binding *a,
+static bool gunyah_gmem_binding_overlaps(struct gunyah_gmem_binding *a,
 						struct gunyah_gmem_binding *b)
 {
 	/* assumes we are operating on the same file, check to be sure */
@@ -600,9 +610,9 @@ static bool gunyah_gmem_binding_allowed_overlap(struct gunyah_gmem_binding *a,
 	 * All this to justify: check that the `a` region doesn't overlap with
 	 * `b` region w.r.t. file offsets.
 	 */
-	if (a->i_off + a->nr < b->i_off)
+	if (a->i_off + a->nr <= b->i_off)
 		return false;
-	if (a->i_off > b->i_off + b->nr)
+	if (a->i_off >= b->i_off + b->nr)
 		return false;
 
 	return true;
@@ -623,23 +633,39 @@ static int gunyah_gmem_add_mapping(struct gunyah_vm *ghvm, struct file *file,
 	if (ret)
 		return ret;
 
+	/**
+	 * When lending memory, we need to unmap single page from kernel's
+	 * logical map. To do that, we need can_set_direct_map().
+	 * arm64 doesn't map at page granularity without rodata=full.
+	 */
+	if (gunyah_guest_mem_is_lend(ghvm, b->flags) && !can_set_direct_map()) {
+		kfree(b);
+		pr_warn_once("Cannot lend memory without rodata=full");
+		return -EINVAL;
+	}
+
+	/**
+	 * First, check that the region of guets memfd user is binding isn't
+	 * already bound to some other guest region.
+	 */
 	filemap_invalidate_lock(inode->i_mapping);
-	list_for_each_entry(tmp,
-                    &gunyah_gmem_inode(inode)->bindings,
-                    i_entry) {
-		if (!gunyah_gmem_binding_allowed_overlap(b, tmp)) {
+	list_for_each_entry(tmp, &gunyah_gmem_inode(inode)->bindings, i_entry) {
+		if (gunyah_gmem_binding_overlaps(b, tmp)) {
 			ret = -EEXIST;
 			goto unlock;
 		}
 	}
 
-	ret = mtree_insert_range(&ghvm->bindings, b->gfn, b->gfn + b->nr - 1,
-				 b, GFP_KERNEL);
+	/**
+	 * mtree_insert_range will check that user hasn't mapped some other guest
+	 * memfd region to the same addresses.
+	 */
+	ret = mtree_insert_range(&ghvm->bindings, b->gfn, b->gfn + b->nr - 1, b,
+				 GFP_KERNEL);
 	if (ret)
 		goto unlock;
 
-	list_add(&b->i_entry,
-         &gunyah_gmem_inode(inode)->bindings);
+	list_add(&b->i_entry, &gunyah_gmem_inode(inode)->bindings);
 
 unlock:
 	filemap_invalidate_unlock(inode->i_mapping);
@@ -702,7 +728,6 @@ int gunyah_gmem_share_parcel(struct gunyah_vm *ghvm, struct gunyah_rm_mem_parcel
 	if (!*nr)
 		return -EINVAL;
 
-
 	down_read(&ghvm->bindings_lock);
 	b = mtree_load(&ghvm->bindings, *gfn);
 	if (!b || *gfn > b->gfn + b->nr || *gfn < b->gfn) {
@@ -722,7 +747,7 @@ int gunyah_gmem_share_parcel(struct gunyah_vm *ghvm, struct gunyah_rm_mem_parcel
 	}
 
 	end = start + *nr;
-	lend = parcel->n_acl_entries == 1 || gunyah_guest_mem_is_lend(ghvm, b->flags);
+	lend = gunyah_guest_mem_is_lend(ghvm, b->flags);
 
 	/**
 	 * First, calculate the number of physically discontiguous regions
@@ -739,6 +764,17 @@ int gunyah_gmem_share_parcel(struct gunyah_vm *ghvm, struct gunyah_rm_mem_parcel
 		if (!folio) {
 			ret = -ENOMEM;
 			goto out;
+		}
+
+		if (lend) {
+			/* don't lend a folio that is mapped by host */
+			if (!gunyah_folio_lend_safe(folio)) {
+				folio_unlock(folio);
+				folio_put(folio);
+				ret = -EPERM;
+				goto out;
+			}
+			folio_set_private(folio);
 		}
 
 		nr_entries++;
@@ -765,9 +801,6 @@ int gunyah_gmem_share_parcel(struct gunyah_vm *ghvm, struct gunyah_rm_mem_parcel
 			i = end + b->i_off;
 			goto out;
 		}
-
-		if (lend)
-			folio_set_private(folio);
 
 		parcel->mem_entries[j].size = cpu_to_le64(folio_size(folio));
 		parcel->mem_entries[j].phys_addr = cpu_to_le64(PFN_PHYS(folio_pfn(folio)));
@@ -825,13 +858,18 @@ out:
 	/* unlock the folios */
 	for (j = start + b->i_off; j < i;) {
 		folio = filemap_get_folio(file_inode(b->file)->i_mapping, j); /* D */
-		if (IS_ERR(folio))
+		if (WARN_ON(IS_ERR(folio)))
 			continue;
 		j = folio->index + folio_nr_pages(folio);
 		folio_unlock(folio); /* A */
-		folio_put(folio); /* D */
-		if (ret)
+		if (ret) {
+			if (folio_test_private(folio)) {
+				gunyah_folio_host_reclaim(folio);
+				folio_clear_private(folio);
+			}
 			folio_put(folio); /* A */
+		}
+		folio_put(folio); /* D */
 		/* matching folio_put for A is done at
 		 * (1) gunyah_gmem_reclaim_parcel or
 		 * (2) after gunyah_gmem_parcel_to_paged, gunyah_vm_reclaim_folio
@@ -868,6 +906,11 @@ int gunyah_gmem_reclaim_parcel(struct gunyah_vm *ghvm,
 			entry = &parcel->mem_entries[i];
 
 			folio = pfn_folio(PHYS_PFN(le64_to_cpu(entry->phys_addr)));
+
+			if (folio_test_private(folio))
+				gunyah_folio_host_reclaim(folio);
+
+			folio_clear_private(folio);
 			folio_put(folio); /* A */
 		}
 
@@ -917,22 +960,6 @@ out:
 	return ret;
 }
 
-static bool folio_mmapped(struct folio *folio)
-{
-	struct address_space *mapping = folio->mapping;
-	struct vm_area_struct *vma;
-	bool ret = false;
-
-	i_mmap_lock_read(mapping);
-	vma_interval_tree_foreach(vma, &mapping->i_mmap, folio->index,
-				  folio->index + folio_nr_pages(folio)) {
-		ret = true;
-		break;
-	}
-	i_mmap_unlock_read(mapping);
-	return ret;
-}
-
 int gunyah_gmem_demand_page(struct gunyah_vm *ghvm, u64 gpa, bool write)
 {
 	unsigned long gfn = gunyah_gpa_to_gfn(gpa);
@@ -952,19 +979,12 @@ int gunyah_gmem_demand_page(struct gunyah_vm *ghvm, u64 gpa, bool write)
 		goto unlock;
 	}
 
-	folio = gunyah_gmem_get_folio(file_inode(b->file), gunyah_gfn_to_off(b, gfn));
-	if (IS_ERR(folio)) {
-		ret = PTR_ERR(folio);
-		pr_err_ratelimited(
-			"Failed to obtain memory for guest addr %016llx: %d\n",
-			gpa, ret);
+	folio = gunyah_gmem_get_folio(file_inode(b->file),
+				      gunyah_gfn_to_off(b, gfn));
+	if (!folio) {
+		ret = -ENOMEM;
+		pr_err_ratelimited("Failed to obtain memory for guest addr %016llx\n", gpa);
 		goto unlock;
-	}
-
-	if (gunyah_guest_mem_is_lend(ghvm, b->flags) &&
-	    (folio_mapped(folio) || folio_mmapped(folio))) {
-		ret = -EPERM;
-		goto out;
 	}
 
 	/**
@@ -974,9 +994,11 @@ int gunyah_gmem_demand_page(struct gunyah_vm *ghvm, u64 gpa, bool write)
 	 */
 	gfn = gunyah_off_to_gfn(b, folio->index);
 
+	filemap_invalidate_lock_shared(b->file->f_mapping);
 	ret = gunyah_vm_provide_folio(ghvm, folio, gfn,
 				      !gunyah_guest_mem_is_lend(ghvm, b->flags),
 				      !!(b->flags & GUNYAH_MEM_ALLOW_WRITE));
+	filemap_invalidate_unlock_shared(b->file->f_mapping);
 	if (ret) {
 		if (ret != -EAGAIN)
 			pr_err_ratelimited(

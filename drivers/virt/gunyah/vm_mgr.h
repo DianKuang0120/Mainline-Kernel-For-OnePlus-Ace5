@@ -10,8 +10,10 @@
 #include <linux/kref.h>
 #include <linux/maple_tree.h>
 #include <linux/mutex.h>
+#include <linux/pagemap.h>
 #include <linux/rbtree.h>
 #include <linux/rwsem.h>
+#include <linux/set_memory.h>
 #include <linux/wait.h>
 
 #include <uapi/linux/gunyah.h>
@@ -125,14 +127,74 @@ struct gunyah_vm {
 
 int gunyah_vm_mmio_write(struct gunyah_vm *ghvm, u64 addr, u32 len, u64 data);
 
+/**
+ * folio_mmapped() - Returns true if the folio is mapped into any vma
+ * @folio: Folio to test
+ */
+static bool folio_mmapped(struct folio *folio)
+{
+	struct address_space *mapping = folio->mapping;
+	struct vm_area_struct *vma;
+	bool ret = false;
+
+	i_mmap_lock_read(mapping);
+	vma_interval_tree_foreach(vma, &mapping->i_mmap, folio->index,
+				  folio->index + folio_nr_pages(folio)) {
+		ret = true;
+		break;
+	}
+	i_mmap_unlock_read(mapping);
+	return ret;
+}
+
+/**
+ * gunyah_folio_lend_safe() - Returns true if folio is ready to be lent to guest
+ * @folio: Folio to prepare
+ *
+ * Tests if the folio is mapped anywhere outside the kernel logical map
+ * and whether any userspace has a vma containing the folio, even if it hasn't
+ * paged it in. We want to avoid causing fault to userspace.
+ * If userspace doesn't have it mapped anywhere, then unmap from kernel
+ * logical map to prevent accidental access (e.g. by load_unaligned_zeropad)
+ */
+static inline bool gunyah_folio_lend_safe(struct folio *folio)
+{
+	long i;
+
+	if (folio_mapped(folio) || folio_mmapped(folio))
+		return false;
+
+	for (i = 0; i < folio_nr_pages(folio); i++)
+		set_direct_map_invalid_noflush(folio_page(folio, i));
+	/**
+	 * No need to flush tlb on armv8/9: hypervisor will flush when it
+	 * removes from our stage 2
+	 */
+	return true;
+}
+
+/**
+ * gunyah_folio_host_reclaim() - Restores kernel logical map to folio
+ * @folio: folio to reclaim by host
+ *
+ * See also gunyah_folio_lend_safe().
+ */
+static inline void gunyah_folio_host_reclaim(struct folio *folio)
+{
+	long i;
+	for (i = 0; i < folio_nr_pages(folio); i++)
+		set_direct_map_default_noflush(folio_page(folio, i));
+}
+
 int gunyah_vm_parcel_to_paged(struct gunyah_vm *ghvm,
 			      struct gunyah_rm_mem_parcel *parcel, u64 gfn,
 			      u64 nr);
+void gunyah_vm_mm_erase_range(struct gunyah_vm *ghvm, u64 gfn, u64 nr);
 int gunyah_vm_reclaim_parcel(struct gunyah_vm *ghvm,
 			     struct gunyah_rm_mem_parcel *parcel, u64 gfn);
 int gunyah_vm_provide_folio(struct gunyah_vm *ghvm, struct folio *folio,
 			    u64 gfn, bool share, bool write);
-int gunyah_vm_reclaim_folio(struct gunyah_vm *ghvm, u64 gfn);
+int gunyah_vm_reclaim_folio(struct gunyah_vm *ghvm, u64 gfn, struct folio *folio);
 int gunyah_vm_reclaim_range(struct gunyah_vm *ghvm, u64 gfn, u64 nr);
 
 int gunyah_guest_mem_create(struct gunyah_create_mem_args *args);

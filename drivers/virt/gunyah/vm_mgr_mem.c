@@ -27,7 +27,7 @@ int gunyah_vm_parcel_to_paged(struct gunyah_vm *ghvm,
 			      u64 nr)
 {
 	struct gunyah_rm_mem_entry *entry;
-	unsigned long i, entry_size, tag = 0;
+	unsigned long i, tag = 0;
 	struct folio *folio;
 	pgoff_t off = 0;
 	int ret;
@@ -39,19 +39,42 @@ int gunyah_vm_parcel_to_paged(struct gunyah_vm *ghvm,
 
 	for (i = 0; i < parcel->n_mem_entries; i++) {
 		entry = &parcel->mem_entries[i];
-		entry_size = PHYS_PFN(le64_to_cpu(entry->size));
 
 		folio = pfn_folio(PHYS_PFN(le64_to_cpu(entry->phys_addr)));
-		ret = mtree_insert_range(&ghvm->mm, gfn + off, gfn + off + folio_nr_pages(folio) - 1, xa_tag_pointer(folio, tag), GFP_KERNEL);
-		if (ret == -ENOMEM)
+		ret = mtree_insert_range(&ghvm->mm, gfn + off,
+					 gfn + off + folio_nr_pages(folio) - 1,
+					 xa_tag_pointer(folio, tag),
+					 GFP_KERNEL);
+		if (ret) {
+			WARN_ON(ret != -ENOMEM);
+			gunyah_vm_mm_erase_range(ghvm, gfn, off - 1);
 			return ret;
-		BUG_ON(ret);
+		}
 		off += folio_nr_pages(folio);
 	}
 
-	BUG_ON(off != nr);
-
 	return 0;
+}
+
+/**
+ * gunyah_vm_mm_erase_range() - Erases a range of folios from ghvm's mm
+ * @ghvm: gunyah vm
+ * @gfn: start guest frame number
+ * @nr: number of pages to erase
+ *
+ * Do not use this function unless rolling back gunyah_vm_parcel_to_paged.
+ */
+void gunyah_vm_mm_erase_range(struct gunyah_vm *ghvm, u64 gfn, u64 nr)
+{
+	struct folio *folio;
+	u64 off = gfn;
+
+	while (off < gfn + nr) {
+		folio = xa_untag_pointer(mtree_erase(&ghvm->mm, off));
+		if (!folio)
+			return;
+		off += folio_nr_pages(folio);
+	}
 }
 
 static inline u32 donate_flags(bool share)
@@ -98,8 +121,10 @@ int gunyah_vm_provide_folio(struct gunyah_vm *ghvm, struct folio *folio,
 	/* clang-format on */
 	addrspace = __first_resource(&ghvm->addrspace_ticket);
 
-	if (!addrspace || !guest_extent || !host_extent)
+	if (!addrspace || !guest_extent || !host_extent) {
+		folio_unlock(folio);
 		return -ENODEV;
+	}
 
 	if (share) {
 		map_flags |= BIT(GUNYAH_ADDRSPACE_MAP_FLAG_VMMIO);
@@ -115,9 +140,15 @@ int gunyah_vm_provide_folio(struct gunyah_vm *ghvm, struct folio *folio,
 				 gfn + folio_nr_pages(folio) - 1,
 				 xa_tag_pointer(folio, tag), GFP_KERNEL);
 	if (ret == -EEXIST)
-		return -EAGAIN;
+		ret = -EAGAIN;
 	if (ret)
 		return ret;
+
+	/* don't lend a folio that is (or could be) mapped by Linux */
+	if (!share && !gunyah_folio_lend_safe(folio)) {
+		ret = -EPERM;
+		goto remove;
+	}
 
 	if (share && write)
 		access = GUNYAH_PAGETABLE_ACCESS_RW;
@@ -131,7 +162,7 @@ int gunyah_vm_provide_folio(struct gunyah_vm *ghvm, struct folio *folio,
 	ret = gunyah_rm_platform_pre_demand_page(ghvm->rm, ghvm->vmid, access,
 						 folio);
 	if (ret)
-		goto remove;
+		goto reclaim_host;
 
 	gunyah_error = gunyah_hypercall_memextent_donate(donate_flags(share),
 							 host_extent->capid,
@@ -180,6 +211,8 @@ platform_release:
 		       gpa, tmp);
 		return ret;
 	}
+reclaim_host:
+	gunyah_folio_host_reclaim(folio);
 remove:
 	mtree_erase(&ghvm->mm, gfn);
 	return ret;
@@ -268,24 +301,26 @@ static int __gunyah_vm_reclaim_folio_locked(struct gunyah_vm *ghvm, void *entry,
 
 	BUG_ON(mtree_erase(&ghvm->mm, gfn) != entry);
 
-	folio_clear_private(folio);
+	if (folio_test_private(folio)) {
+		gunyah_folio_host_reclaim(folio);
+		folio_clear_private(folio);
+	}
+
 	folio_put(folio);
 	return 0;
 err:
 	return ret;
 }
 
-int gunyah_vm_reclaim_folio(struct gunyah_vm *ghvm, u64 gfn)
+int gunyah_vm_reclaim_folio(struct gunyah_vm *ghvm, u64 gfn, struct folio *folio)
 {
-	struct folio *folio;
 	void *entry;
 
 	entry = mtree_load(&ghvm->mm, gfn);
 	if (!entry)
 		return 0;
 
-	folio = xa_untag_pointer(entry);
-	if (mtree_load(&ghvm->mm, gfn) != entry)
+	if (folio != xa_untag_pointer(entry))
 		return -EAGAIN;
 
 	return __gunyah_vm_reclaim_folio_locked(ghvm, entry, gfn, true);

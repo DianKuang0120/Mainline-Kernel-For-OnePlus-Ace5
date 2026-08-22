@@ -108,8 +108,8 @@ static void gunyah_ioevent_unbind(struct gunyah_vm_function_instance *f)
 {
 	struct gunyah_ioeventfd *iofd = f->data;
 
-	eventfd_ctx_put(iofd->ctx);
 	gunyah_vm_remove_io_handler(iofd->f->ghvm, &iofd->io_handler);
+	eventfd_ctx_put(iofd->ctx);
 	kfree(iofd);
 }
 

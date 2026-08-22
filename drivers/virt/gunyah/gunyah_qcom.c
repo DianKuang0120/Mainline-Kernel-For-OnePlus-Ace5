@@ -68,6 +68,8 @@ qcom_scm_gunyah_rm_pre_mem_share(struct gunyah_rm *rm,
 	}
 
 	new_perms[0].vmid = QCOM_SCM_VMID_HLOS;
+	new_perms[0].perm = QCOM_SCM_PERM_EXEC | QCOM_SCM_PERM_WRITE |
+			    QCOM_SCM_PERM_READ;
 
 	for (i--; i >= 0; i--) {
 		src_cpy = src;
