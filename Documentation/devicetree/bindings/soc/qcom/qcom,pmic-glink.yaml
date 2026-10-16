@@ -64,6 +64,120 @@ properties:
       The array should contain a gpio entry for each PMIC Glink connector, in reg order.
       It is defined that GPIO active level means "CC2" or Reversed/Flipped orientation.
 
+  oneplus,pps-read-buffer:
+    type: boolean
+    description:
+      The battery-management firmware implements the OnePlus read-only PPS
+      capability buffer request. This allows the operating system to retrieve
+      the connected power source PDO table when standard UCSI PDO details are
+      not advertised.
+
+  oneplus,pps-fixed-5v:
+    type: boolean
+    description:
+      The battery-management firmware implements the OnePlus fixed-PDO request
+      used to return a connected USB PD source to 5 V. This development-only
+      opt-in exposes only the fixed 5-V request, and requires the read-only PPS
+      capability-buffer interface to verify that the source advertises 5 V.
+
+  oneplus,pps-5v5-1a:
+    type: boolean
+    description:
+      The battery-management firmware implements the OnePlus programmable-PDO
+      voltage and current requests. This development-only opt-in exposes one
+      fixed test request of 5.5 V at 1 A, verifies it against the advertised
+      source APDOs, and requires the fixed 5-V fallback interface.
+
+  oneplus,pps-ramp-9v-1a:
+    type: boolean
+    description:
+      The battery-management firmware implements the OnePlus programmable-PDO
+      voltage and current requests. This development-only opt-in exposes one
+      source-only test which ramps from 5.5 V to 9 V in 0.5-V steps at 1 A.
+      It does not enable any charge pump and requires both the 5.5-V test and
+      fixed 5-V fallback interfaces.
+
+  oneplus,pps-ramp-9v2-1a:
+    type: boolean
+    description:
+      Development-only follow-up to the validated 9-V PPS ramp. It preserves
+      the 5.5-V to 9-V ramp and then requests 9.1 V and 9.2 V in 100-mV steps,
+      remaining capped at 1 A. It never enables a charge pump and requires the
+      9-V ramp and fixed 5-V fallback interfaces.
+
+  oneplus,pps-ramp-2to1-1a:
+    type: boolean
+    description:
+      Development-only source request for a bounded 2-to-1 charge-pump test.
+      It reads the live battery voltage, reproduces the downstream pump start
+      target, adds a fixed allowance for measured source sag, and ramps PPS to
+      that value at 1 A. It never enables a charge pump and requires the 9-V
+      ramp and fixed 5-V fallback interfaces.
+
+  oneplus,pps-run-2to1-5m:
+    type: boolean
+    description:
+      Development-only end-to-end five-minute charge-pump test. It runs the
+      validated gauge-derived 2-to-1 PPS feedback loop, hands control directly
+      to the primary SC8547 charge pump through its power-supply callback without a
+      userspace timing gap, and restores fixed 5 V when the bounded run ends or
+      fails. It requires the 2-to-1 PPS ramp interface.
+
+  oneplus,pps-policy-2to1-1a:
+    type: boolean
+    description:
+      Development-only asynchronous single-primary charge policy. It uses the
+      validated 2-to-1 PPS ramp at no more than 1.75 A, monitors USB attachment,
+      battery voltage and battery temperature while the physical pump retains
+      its local 500-ms safety checks, and supports an explicit stop request.
+      Every exit disables and restores the pump before requesting fixed 5 V.
+      The secondary pump remains off. It requires the five-minute end-to-end
+      test interface.
+
+  oneplus,pps-policy-auto-start:
+    type: boolean
+    description:
+      Development-only opt-in that arms the validated single-primary 2-to-1
+      policy on a physical source detach and starts it once on the next
+      confirmed attachment. Startup additionally requires pump-side source
+      presence, at least 4 V input, Qualcomm USB online state, battery voltage
+      no higher than 4.20 V, and the existing battery-temperature window. A
+      user stop suppresses restart until another detach, and startup failures
+      are limited to three attempts per attachment. It requires the 2-to-1
+      policy interface.
+
+  oneplus,pps-secondary-500ms:
+    type: boolean
+    description:
+      Development-only independent secondary charge-pump gate. It requires
+      both physical pumps to begin off, runs the validated gauge-derived
+      2-to-1 PPS ramp at no more than 1 A using the secondary pump ADC, checks
+      again that the primary remains off at handoff, and enables only the
+      secondary pump for one bounded 500-ms active sample. Every exit restores
+      the secondary profile, requests fixed 5 V, and verifies both pumps off.
+      It requires the 2-to-1 PPS ramp interface.
+
+  oneplus,pps-dual-500ms:
+    type: boolean
+    description:
+      Development-only staged dual-pump overlap gate. It prepares both pumps
+      at fixed 5 V, waits one second and rechecks both off, then performs one
+      gauge-derived 2-to-1 PPS ramp capped at 1.75 A. A cold initialized
+      primary gets the same bounded ADC-ready retries as the secondary before
+      the ramp proceeds. The dual ramp allows two additional feedback samples
+      to confirm the unchanged narrow handoff window. It then
+      starts the primary for seven seconds, and requires the primary to remain
+      active while the secondary runs for five seconds. After both pumps pass
+      active/current checks, it follows the vendor third-party PPS control
+      shape: raise the shared PPS voltage in at most five 40-mV steps at 3 A,
+      wait 500 ms and check both pumps after each step, then stop when aggregate
+      pump IBUS is within 100 mA of 2 A. It never exceeds a 200-mV increase and
+      returns the request to the baseline voltage at 1.75 A before either run
+      finishes.
+      Every exit cancels any active primary run, restores both pump profiles,
+      requests fixed 5 V, and verifies both pumps off. It requires the
+      independent secondary-pump gate.
+
   nvmem-cells:
     minItems: 3
     maxItems: 3
@@ -131,4 +245,3 @@ examples:
         };
     };
 ...
-

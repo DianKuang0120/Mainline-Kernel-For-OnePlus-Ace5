@@ -696,6 +696,13 @@ static const struct tee_desc qcomtee_desc = {
 	.owner = THIS_MODULE,
 };
 
+/* Skip the QTEE version probe (it registers a client environment). */
+static bool qcomtee_skip_probe_client_env;
+module_param_named(skip_probe_client_env, qcomtee_skip_probe_client_env,
+		   bool, 0644);
+MODULE_PARM_DESC(skip_probe_client_env,
+		 "Do not register a client environment from the driver probe");
+
 static int qcomtee_probe(struct platform_device *pdev)
 {
 	struct workqueue_struct *async_wq;
@@ -751,15 +758,25 @@ static int qcomtee_probe(struct platform_device *pdev)
 	/* Init Object table. */
 	qcomtee->xa_last_id = 0;
 	xa_init_flags(&qcomtee->xa_local_objects, XA_FLAGS_ALLOC);
-	/* Get QTEE verion. */
-	qcomtee_get_qtee_feature_list(qcomtee->ctx,
-				      QCOMTEE_FEATURE_VER_OP_GET_QTEE_ID,
-				      &qcomtee->qtee_version);
+	/*
+	 * Getting the QTEE version registers a client environment, which this
+	 * TEE grants only once per boot.  Allow skipping it so a userspace
+	 * client can be the first registrant.
+	 */
+	if (!qcomtee_skip_probe_client_env) {
+		qcomtee_get_qtee_feature_list(qcomtee->ctx,
+					      QCOMTEE_FEATURE_VER_OP_GET_QTEE_ID,
+					      &qcomtee->qtee_version);
 
-	pr_info("QTEE version %u.%u.%u\n",
-		QTEE_VERSION_GET_MAJOR(qcomtee->qtee_version),
-		QTEE_VERSION_GET_MINOR(qcomtee->qtee_version),
-		QTEE_VERSION_GET_PATCH(qcomtee->qtee_version));
+		pr_info("QTEE version %u.%u.%u\n",
+			QTEE_VERSION_GET_MAJOR(qcomtee->qtee_version),
+			QTEE_VERSION_GET_MINOR(qcomtee->qtee_version),
+			QTEE_VERSION_GET_PATCH(qcomtee->qtee_version));
+	} else {
+		pr_info("skipping QTEE version probe (client env left free)\n");
+	}
+
+	qcomtee_qseecom_compat_init(qcomtee);
 
 	return 0;
 
@@ -790,6 +807,7 @@ static void qcomtee_remove(struct platform_device *pdev)
 {
 	struct qcomtee *qcomtee = platform_get_drvdata(pdev);
 
+	qcomtee_qseecom_compat_exit();
 	teedev_close_context(qcomtee->ctx);
 	/* Wait for RELEASE operations to be processed for QTEE objects. */
 	tee_device_unregister(qcomtee->teedev);

@@ -12,3 +12,4 @@ TEE Subsystem
    amd-tee
    ts-tee
    qtee
+   qseecom

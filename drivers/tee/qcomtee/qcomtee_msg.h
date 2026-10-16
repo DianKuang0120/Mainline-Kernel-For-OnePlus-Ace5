@@ -86,7 +86,7 @@ union qcomtee_msg_arg {
 
 /* Subset of operations supported by QTEE root object. */
 
-#define QCOMTEE_ROOT_OP_REG_WITH_CREDENTIALS	5
+#define QCOMTEE_ROOT_OP_REG_WITH_CREDENTIALS	2
 #define QCOMTEE_ROOT_OP_NOTIFY_DOMAIN_CHANGE	4
 #define QCOMTEE_ROOT_OP_ADCI_ACCEPT		8
 #define QCOMTEE_ROOT_OP_ADCI_SHUTDOWN		9

@@ -6,6 +6,7 @@
 #define __QCOM_SCM_H
 
 #include <linux/err.h>
+#include <linux/list.h>
 #include <linux/types.h>
 #include <linux/cpumask.h>
 
@@ -167,9 +168,62 @@ int qcom_scm_shm_bridge_create(u64 pfn_and_ns_perm_flags,
 			       u64 ns_vmids, u64 *handle);
 int qcom_scm_shm_bridge_delete(u64 handle);
 
+/**
+ * enum qcom_scm_qseecom_listener_status - Result of servicing a listener request.
+ * @QSEECOM_LISTENER_SUCCESS: Request was serviced and the shared buffer holds
+ *                            the reply the app is waiting for.
+ * @QSEECOM_LISTENER_FAILURE: Request could not be serviced.
+ */
+enum qcom_scm_qseecom_listener_status {
+	QSEECOM_LISTENER_SUCCESS	= 0,
+	QSEECOM_LISTENER_FAILURE	= 1,
+};
+
+/**
+ * struct qcom_scm_qseecom_listener - A QSEE listener service.
+ * @id:      Listener ID, as agreed with the apps that call it. Must be unique.
+ * @sb:      Shared buffer, through which requests and replies are passed. Must
+ *           be TZ memory, and stay mapped for as long as the listener is
+ *           registered.
+ * @sb_len:  Size of @sb in bytes.
+ * @service: Called when a QSEE app asks this listener to do something. The
+ *           request is in @sb and the reply must be written back to @sb.
+ *           Return one of &enum qcom_scm_qseecom_listener_status.
+ * @node:    Internal, used to track registered listeners.
+ *
+ * A listener is how a QSEE app reaches back out to the normal world for things
+ * it cannot do itself, which in practice is nearly always file I/O against
+ * secure storage. It is the same idea as an OP-TEE RPC to tee-supplicant: the
+ * app blocks, we are asked to do the work, the app resumes.
+ *
+ * @service is called with the QSEECOM call lock held, from the context that
+ * issued the command the app is currently running. It must therefore not
+ * issue any QSEECOM call of its own, and that includes registering or
+ * unregistering a listener: those take the same lock and would deadlock
+ * against the call being serviced. It should also not sleep for long, since
+ * it is blocking every other QSEECOM user for as long as it runs.
+ *
+ * Returning %QSEECOM_LISTENER_SUCCESS without having actually filled @sb is
+ * considerably worse than returning %QSEECOM_LISTENER_FAILURE. The app reads
+ * whatever happens to be in the buffer and behaves accordingly, which has been
+ * observed to hang the secure world until the watchdog fires.
+ */
+struct qcom_scm_qseecom_listener {
+	u32 id;
+	void *sb;
+	size_t sb_len;
+	int (*service)(struct qcom_scm_qseecom_listener *listener);
+	struct list_head node;
+};
+
 #ifdef CONFIG_QCOM_QSEECOM
 
 int qcom_scm_qseecom_app_get_id(const char *app_name, u32 *app_id);
+int qcom_scm_qseecom_app_load(void *img, size_t mdt_len, size_t img_len,
+			      u32 *app_id);
+int qcom_scm_qseecom_app_shutdown(u32 app_id);
+int qcom_scm_qseecom_listener_register(struct qcom_scm_qseecom_listener *listener);
+int qcom_scm_qseecom_listener_unregister(struct qcom_scm_qseecom_listener *listener);
 int qcom_scm_qseecom_app_send(u32 app_id, void *req, size_t req_size,
 			      void *rsp, size_t rsp_size);
 
@@ -180,9 +234,32 @@ static inline int qcom_scm_qseecom_app_get_id(const char *app_name, u32 *app_id)
 	return -EINVAL;
 }
 
+static inline int qcom_scm_qseecom_app_load(void *img, size_t mdt_len,
+					    size_t img_len, u32 *app_id)
+{
+	return -EINVAL;
+}
+
+static inline int qcom_scm_qseecom_app_shutdown(u32 app_id)
+{
+	return -EINVAL;
+}
+
 static inline int qcom_scm_qseecom_app_send(u32 app_id,
 					    void *req, size_t req_size,
 					    void *rsp, size_t rsp_size)
+{
+	return -EINVAL;
+}
+
+static inline int
+qcom_scm_qseecom_listener_register(struct qcom_scm_qseecom_listener *listener)
+{
+	return -EINVAL;
+}
+
+static inline int
+qcom_scm_qseecom_listener_unregister(struct qcom_scm_qseecom_listener *listener)
 {
 	return -EINVAL;
 }

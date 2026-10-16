@@ -8,3 +8,4 @@ obj-$(CONFIG_OPTEE) += optee/
 obj-$(CONFIG_AMDTEE) += amdtee/
 obj-$(CONFIG_ARM_TSTEE) += tstee/
 obj-$(CONFIG_QCOMTEE) += qcomtee/
+obj-$(CONFIG_TEE_QSEECOM) += qseecom/

@@ -25,7 +25,7 @@
  * requires a size larger than %MAX_INBOUND_BUFFER_SIZE, the user should
  * consider using another form of shared memory with QTEE.
  */
-#define MAX_INBOUND_BUFFER_SIZE SZ_4M
+#define MAX_INBOUND_BUFFER_SIZE SZ_16M
 
 /**
  * qcomtee_msg_buffers_alloc() - Allocate inbound and outbound buffers.
@@ -41,6 +41,10 @@ int qcomtee_msg_buffers_alloc(struct qcomtee_object_invoke_ctx *oic,
 			      struct qcomtee_arg *u)
 {
 	struct tee_context *ctx = oic->ctx;
+	struct qcom_tzmem_pool_config cfg = {
+		.policy = QCOM_TZMEM_POLICY_STATIC,
+	};
+	struct qcom_tzmem_pool *pool;
 	struct tee_shm *shm;
 	size_t size;
 	int i;
@@ -65,23 +69,61 @@ int qcomtee_msg_buffers_alloc(struct qcomtee_object_invoke_ctx *oic,
 			return -EINVAL;
 	}
 
-	shm = tee_shm_alloc_priv_buf(ctx, size);
-	if (IS_ERR(shm))
-		return PTR_ERR(shm);
+	/*
+	 * QTEE expects the size handed to the SMC to be page aligned (the
+	 * vendor driver does PAGE_ALIGN() on the computed message size).  A
+	 * non-aligned size makes QTEE reject the invocation with
+	 * QCOMTEE_MSG_ERROR_UNAVAIL.
+	 */
+	size = PAGE_ALIGN(size);
+	if (size > MAX_INBOUND_BUFFER_SIZE)
+		return -EINVAL;
 
-	/* Allocate inbound buffer. */
-	oic->in_shm = shm;
+	/*
+	 * Take the inbound buffer from TZ memory rather than the teedev pool:
+	 * qcom_tzmem allocates via dma_alloc_coherent() (non-cacheable and
+	 * physically contiguous, so QTEE reads exactly what we wrote and the
+	 * SHM bridge is set up for it).  alloc_pages_exact() memory would be
+	 * cacheable and needs explicit flushing, and cannot satisfy the
+	 * several-megabyte contiguous request a QSEECOM image needs.
+	 */
+	cfg.initial_size = max(size, SZ_64K);
+	cfg.max_size = cfg.initial_size;
+	pool = qcom_tzmem_pool_new(&cfg);
+	if (IS_ERR(pool)) {
+		pr_err("qcom_tzmem_pool_new(%zu) failed: %ld\n",
+		       cfg.initial_size, PTR_ERR(pool));
+		return PTR_ERR(pool);
+	}
+
+	oic->in_buf = qcom_tzmem_alloc(pool, size, GFP_KERNEL);
+	if (!oic->in_buf) {
+		pr_err("qcom_tzmem_alloc(%zu) failed\n", size);
+		qcom_tzmem_pool_free(pool);
+		return -ENOMEM;
+	}
+	oic->in_pool = pool;
+	oic->in_msg.addr = oic->in_buf;
+	oic->in_msg.size = size;
+
+	/* The outbound buffer is small; keep it on the teedev pool. */
 	shm = tee_shm_alloc_priv_buf(ctx, MAX_OUTBOUND_BUFFER_SIZE);
 	if (IS_ERR(shm)) {
-		tee_shm_free(oic->in_shm);
+		if (oic->in_buf)
+			qcom_tzmem_free(oic->in_buf);
+		if (oic->in_pool)
+			qcom_tzmem_pool_free(oic->in_pool);
+		if (oic->in_shm)
+			tee_shm_free(oic->in_shm);
+		oic->in_buf = NULL;
+		oic->in_pool = NULL;
+		oic->in_shm = NULL;
 
 		return PTR_ERR(shm);
 	}
 	/* Allocate outbound buffer. */
 	oic->out_shm = shm;
 
-	oic->in_msg.addr = tee_shm_get_va(oic->in_shm, 0);
-	oic->in_msg.size = tee_shm_get_size(oic->in_shm);
 	oic->out_msg.addr = tee_shm_get_va(oic->out_shm, 0);
 	oic->out_msg.size = tee_shm_get_size(oic->out_shm);
 	/* QTEE assume unused buffers are zeroed. */
@@ -93,7 +135,16 @@ int qcomtee_msg_buffers_alloc(struct qcomtee_object_invoke_ctx *oic,
 
 void qcomtee_msg_buffers_free(struct qcomtee_object_invoke_ctx *oic)
 {
-	tee_shm_free(oic->in_shm);
+	if (oic->in_shm)
+		tee_shm_free(oic->in_shm);
+	if (oic->in_buf)
+		qcom_tzmem_free(oic->in_buf);
+	if (oic->in_pool)
+		qcom_tzmem_pool_free(oic->in_pool);
+	oic->in_shm = NULL;
+	oic->in_buf = NULL;
+	oic->in_pool = NULL;
+
 	tee_shm_free(oic->out_shm);
 }
 

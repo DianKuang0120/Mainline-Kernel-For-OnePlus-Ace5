@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Qualcomm QSEECOM TEE driver
+config TEE_QSEECOM
+	tristate "Qualcomm QSEECOM TEE driver"
+	depends on QCOM_QSEECOM
+	depends on !CPU_BIG_ENDIAN
+	depends on QCOM_MDT_LOADER
+	help
+	  This exposes QSEE applications reached over the legacy QSEECOM
+	  interface through the TEE subsystem, so that user space can open a
+	  session to a trusted application and invoke commands in it.
+
+	  This is the command-based Qualcomm interface, as distinct from the
+	  object-based smcinvoke interface served by the QCOMTEE driver. The
+	  two are not alternative routes to the same applications: a trusted
+	  application is built against one or the other, so what a system needs
+	  is decided by the applications in its firmware rather than by the age
+	  of its SoC. Platforms offering both interfaces are common, and may
+	  still carry applications that answer only over QSEECOM.
+
+	  Say Y if the firmware carries such applications. See
+	  Documentation/tee/qseecom.rst.
+
+	  Note that the driver cannot validate what a command means, because it
+	  does not know any application's payload format: anyone who can open
+	  the client device may send arbitrary commands to any loaded trusted
+	  application. Restrict access to the device nodes accordingly. See
+	  Documentation/tee/qseecom.rst.

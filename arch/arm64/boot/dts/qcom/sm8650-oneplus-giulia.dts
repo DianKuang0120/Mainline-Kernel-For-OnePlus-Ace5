@@ -3,6 +3,8 @@
 /dts-v1/;
 
 #include <dt-bindings/leds/common.h>
+#include <dt-bindings/media/video-interfaces.h>
+#include <dt-bindings/clock/qcom,sm8650-camcc.h>
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 #include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
@@ -59,6 +61,24 @@
 
 		orientation-gpios = <&tlmm 29 GPIO_ACTIVE_HIGH>;
 
+		/*
+		 * OnePlus PPS charge-pump bring-up gates (qcom_battmgr OnePlus
+		 * PPS patch).  The 2:1 policy service requires the whole chain:
+		 * read-buffer -> fixed-5V -> 5.5V -> 9V -> 2:1 ramp -> 5m run ->
+		 * policy, with auto-start.  The secondary/dual gates are left
+		 * disabled; enable them only when testing the dual-pump path.
+		 */
+		oneplus,pps-read-buffer;
+		oneplus,pps-fixed-5v;
+		oneplus,pps-5v5-1a;
+		oneplus,pps-ramp-9v-1a;
+		oneplus,pps-ramp-9v2-1a;
+		oneplus,pps-ramp-2to1-1a;
+		oneplus,pps-run-2to1-5m;
+		oneplus,pps-policy-2to1-1a;
+		oneplus,pps-secondary-500ms;
+		oneplus,pps-dual-500ms;
+
 		connector@0 {
 			compatible = "usb-c-connector";
 			reg = <0>;
@@ -100,9 +120,9 @@
 						"IN2_HPHR", "HPHR_OUT",
 						"AMIC1", "MIC BIAS1",
 						"AMIC2", "MIC BIAS2",
-						"AMIC3", "MIC BIAS3",
+						"AMIC3", "MIC BIAS4",
 						"AMIC4", "MIC BIAS3",
-						"AMIC5", "MIC BIAS4",
+						"AMIC5", "MIC BIAS1",
 						"TX SWR_INPUT0", "ADC1_OUTPUT",
 						"TX SWR_INPUT1", "ADC2_OUTPUT",
 						"TX SWR_INPUT2", "ADC3_OUTPUT",
@@ -289,6 +309,33 @@
 
 		gpio = <&tlmm 108 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
+	};
+
+	/*
+	 * Goodix under-display optical fingerprint sensor (UFF), driven from
+	 * QSEE in TEE mode: the SPI bus and all biometric logic belong to the
+	 * secure world, so the AP only owns the supply, the reset line and no
+	 * interrupt.  Finger events are delivered to userspace by the
+	 * touchscreen, which is why there is no "interrupts" here.
+	 *
+	 * "firmware-name" is the trusted application the QSEECOM TEE driver
+	 * loads from the vendor firmware; on giulia the optical part is a
+	 * Jiiov JV0301, whose TA is "uff_jv" (/odm/vendor/firmware/uff_jv.mdt).
+	 *
+	 * NOTE: the real part is a GW in-display sensor; "goodix,gf3626" is
+	 * used here as the reference driver's tested compatible until the
+	 * exact part is known.
+	 */
+	fingerprint {
+		compatible = "goodix,gf3626";
+
+		reset-gpios = <&tlmm 89 GPIO_ACTIVE_LOW>;
+		vdd-supply = <&vreg_l14b_3p2>;
+
+		firmware-name = "uff_jv";
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&fp_reset_default>;
 	};
 };
 
@@ -593,6 +640,18 @@
 									   RPMH_REGULATOR_MODE_HPM>;
 		};
 
+		/* camera dvdd for the ultrawide (downstream pm_v6g_l2, 1.2 V) */
+		vreg_l2g_1p2: ldo2 {
+			regulator-name = "vreg_l2g_1p2";
+			regulator-always-on;
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-allow-set-load;
+			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
+									   RPMH_REGULATOR_MODE_HPM>;
+		};
+
 		vreg_l3g_0p91: ldo3 {
 			regulator-name = "vreg_l3g_0p91";
 			regulator-min-microvolt = <880000>;
@@ -690,6 +749,7 @@
 
 		vreg_l4m_2p8: ldo4 {
 			regulator-name = "vreg_l4m_2p8";
+			regulator-always-on;
 			regulator-min-microvolt = <2800000>;
 			regulator-max-microvolt = <2800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
@@ -697,15 +757,18 @@
 
 		vreg_l5m_1p8: ldo5 {
 			regulator-name = "vreg_l5m_1p8";
+			regulator-always-on;
 			regulator-min-microvolt = <1800000>;
 			regulator-max-microvolt = <1800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
-		vreg_l6m_2p8: ldo6 {
-			regulator-name = "vreg_l6m_2p8";
-			regulator-min-microvolt = <2800000>;
-			regulator-max-microvolt = <2800000>;
+		/* giulia: L6M is 1.8 V (downstream pm8010m_l6 init-voltage), not
+		 * the 2.8 V the reference board uses. */
+		vreg_l6m_1p8: ldo6 {
+			regulator-name = "vreg_l6m_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
@@ -721,22 +784,111 @@
 };
 
 /*
- * Cameras differ from QRD: giulia has 50MP main LYT-700 + 8MP UW + 2MP macro,
- * powered by pm8010m/n rails. Leave CAMSS/CCI enabled for bringup, add
- * sensors later from downstream cam_sensor nodes.
+ * Cameras on giulia: 50MP main (Sony IMX906 / LYT-700), 8MP ultrawide
+ * (Sony IMX355) and a 2MP macro, powered by the pm8010m rails.
+ *
+ * Bringup target: the ultrawide IMX355 (has a mainline driver).
+ * Downstream truth (qcom,cam-sensor1): CCI0 master 0 (SDA/SCL gpio113/114),
+ * CSI PHY0, MCLK2 (gpio102, 19.2 MHz), reset gpio14,
+ * vana 2.8V (pm8010m_l4), vdig 1.2V (pm_v6g_l2), vio 1.8V (pm8010m_l5).
  */
 &camss {
+	vdd-csiphy01-0p9-supply = <&vreg_l2i_0p88>;
+	vdd-csiphy01-1p2-supply = <&vreg_l3i_1p2>;
 	vdd-csiphy35-0p9-supply = <&vreg_l2i_0p88>;
 	vdd-csiphy35-1p2-supply = <&vreg_l3i_1p2>;
 
 	status = "okay";
+
+	ports {
+		port@0 {
+			csiphy0_ep: endpoint {
+				data-lanes = <0 1 2 3>;
+				remote-endpoint = <&imx355_ep>;
+			};
+		};
+
+		port@1 {
+			csiphy1_ep: endpoint {
+				data-lanes = <0 1 2>;
+				remote-endpoint = <&imx906_ep>;
+			};
+		};
+	};
+};
+
+&cci0 {
+	status = "okay";
+};
+
+/* 8MP ultrawide: Sony IMX355 */
+&cci0_i2c0 {
+	imx355: camera@1a {
+		compatible = "sony,imx355";
+		reg = <0x1a>;
+
+		clocks = <&camcc CAM_CC_MCLK2_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK2_CLK>;
+		assigned-clock-rates = <19200000>;
+
+		reset-gpios = <&tlmm 14 GPIO_ACTIVE_LOW>;
+		pinctrl-0 = <&cam2_default>;
+		pinctrl-1 = <&cam2_sleep>;
+		pinctrl-names = "default", "sleep";
+
+		avdd-supply = <&vreg_l4m_2p8>;
+		dvdd-supply = <&vreg_l2g_1p2>;
+		dovdd-supply = <&vreg_l5m_1p8>;
+
+		port {
+			imx355_ep: endpoint {
+				remote-endpoint = <&csiphy0_ep>;
+				data-lanes = <0 1 2 3>;
+				link-frequencies = /bits/ 64 <360000000>;
+			};
+		};
+	};
+};
+
+/* 50MP main: Sony IMX906 (LYT-700).  Bring-up scaffold (P1). */
+&cci0_i2c1 {
+	imx906: camera@1a {
+		compatible = "sony,imx906";
+		reg = <0x1a>;
+
+		clocks = <&camcc CAM_CC_MCLK1_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK1_CLK>;
+		assigned-clock-rates = <19200000>;
+		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
+
+		reset-gpios = <&tlmm 82 GPIO_ACTIVE_LOW>;
+		pinctrl-0 = <&cam1_default>;
+		pinctrl-1 = <&cam1_sleep>;
+		pinctrl-names = "default", "sleep";
+
+		avdd-supply = <&vreg_l6m_1p8>;
+		dvdd-supply = <&vreg_l1m_1p1>;
+		dovdd-supply = <&vreg_l5m_1p8>;
+		vaf-supply = <&vreg_l7m_2p96>;
+		v_custom1-supply = <&vreg_l3m_2p8>;
+		v_custom2-supply = <&vreg_l7m_2p96>;
+
+		port {
+			imx906_ep: endpoint {
+				remote-endpoint = <&csiphy1_ep>;
+				bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
+				data-lanes = <0 1 2>;
+				link-frequencies = /bits/ 64 <2490000000>;
+			};
+		};
+	};
 };
 
 &cci1 {
 	status = "okay";
 };
 
-/* TODO: add giulia camera sensors from downstream (not QRD's s5kjn1) */
+/* TODO: 50MP main (imx906) and 2MP macro sensors */
 &cci1_i2c0 {
 };
 
@@ -1493,6 +1645,39 @@
 		reg = <0x6a>;
 
 		southchip,master;
+		southchip,role = "primary";
+		southchip,psy-name = "sc8547-primary";
+
+		/*
+		 * Development bring-up: expose the SC8547D charge-pump write
+		 * path used by the qcom_battmgr OnePlus PPS patch.  The raw
+		 * protection profile matches the downstream SC8547D
+		 * sc8547_init_device() image; the voltage window is derived from
+		 * the validated 2:1 envelope (7.3-9.4 V input, 3.60-4.35 V cell,
+		 * start target 2*VBAT + 0.45 V with 0.20 V overshoot, 70 C die).
+		 * Re-validate these bounds on giulia before daily use.
+		 */
+		southchip,allow-experimental-control;
+		southchip,allow-experimental-cp-enable;
+		southchip,allow-experimental-cp-pulse;
+
+		southchip,experimental-reg00 = <0x36>; /* BAT OVP  */
+		southchip,experimental-reg01 = <0xbf>; /* BAT OCP  */
+		southchip,experimental-reg02 = <0x01>; /* AC OVP   */
+		southchip,experimental-reg04 = <0x50>; /* VBUS OVP */
+		southchip,experimental-reg05 = <0x1e>; /* IBUS OCP */
+		southchip,experimental-reg0d = <0x70>; /* PMID2OUT */
+
+		southchip,experimental-vbus-min-uv = <6200000>;
+		southchip,experimental-vbus-max-uv = <9400000>;
+		southchip,experimental-vbat-min-uv = <3000000>;
+		southchip,experimental-vbat-max-uv = <4350000>;
+		southchip,experimental-pulse-vbus-min-uv = <6200000>;
+		southchip,experimental-start-delta-uv = <450000>;
+		southchip,experimental-start-overshoot-max-uv = <200000>;
+		southchip,experimental-start-reference-max-uv = <4350000>;
+		southchip,experimental-pulse-ratio-error-max-uv = <250000>;
+		southchip,experimental-tdie-max-mc = <70000>;
 
 		ovp_reg = <0x36>;
 		ocp_reg = <0x0e>;
@@ -1513,6 +1698,32 @@
 	sc8547_slave: charger@6a {
 		compatible = "southchip,sc8547";
 		reg = <0x6a>;
+
+		southchip,role = "secondary";
+		southchip,psy-name = "sc8547-secondary";
+
+		/* Same development opt-in / SC8547D image as the primary. */
+		southchip,allow-experimental-control;
+		southchip,allow-experimental-cp-enable;
+		southchip,allow-experimental-cp-pulse;
+
+		southchip,experimental-reg00 = <0x36>;
+		southchip,experimental-reg01 = <0xbf>;
+		southchip,experimental-reg02 = <0x01>;
+		southchip,experimental-reg04 = <0x50>;
+		southchip,experimental-reg05 = <0x1e>;
+		southchip,experimental-reg0d = <0x70>;
+
+		southchip,experimental-vbus-min-uv = <6200000>;
+		southchip,experimental-vbus-max-uv = <9400000>;
+		southchip,experimental-vbat-min-uv = <3000000>;
+		southchip,experimental-vbat-max-uv = <4500000>;
+		southchip,experimental-pulse-vbus-min-uv = <6200000>;
+		southchip,experimental-start-delta-uv = <450000>;
+		southchip,experimental-start-overshoot-max-uv = <200000>;
+		southchip,experimental-start-reference-max-uv = <4350000>;
+		southchip,experimental-pulse-ratio-error-max-uv = <250000>;
+		southchip,experimental-tdie-max-mc = <70000>;
 
 		ovp_reg = <0x36>;
 		ocp_reg = <0x0e>;
@@ -1599,4 +1810,29 @@
 		drive-strength = <2>;
 		bias-disable;
 	};
+
+	/* Goodix UFF fingerprint reset: GPIO89, held low (asserted) by default */
+	fp_reset_default: fp-reset-default-state {
+		pins = "gpio89";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-low;
+	};
+};
+
+/ {
+    hypervisor {
+        compatible = "qcom,gunyah-hypervisor", "gunyah-hypervisor", "simple-bus";
+        #address-cells = <2>;
+        #size-cells = <0>;
+    
+	gunyah-resource-mgr@831f2ab7189a43c1 {
+	    compatible = "gunyah-resource-manager";
+	    reg = <0x831f2ab7 0x189a43c1>,
+	          <0x831f2ab7 0x189a807c>;
+	    interrupts = <GIC_SPI 0x3a0 IRQ_TYPE_EDGE_RISING 0>,  /* 末尾多一个 0 */
+	                 <GIC_SPI 0x3a1 IRQ_TYPE_EDGE_RISING 0>;
+	};
+    };
 };

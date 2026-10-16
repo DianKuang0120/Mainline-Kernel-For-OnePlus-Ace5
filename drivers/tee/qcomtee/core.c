@@ -6,6 +6,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/firmware/qcom/qcom_scm.h>
+#include <linux/firmware/qcom/qcom_tzmem.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -14,11 +15,15 @@
 
 #include "qcomtee.h"
 
+/* Dump the inbound buffer QTEE wrote back after an invocation. */
+static bool qcomtee_dbg_msg;
+module_param_named(dbg_msg, qcomtee_dbg_msg, bool, 0644);
+MODULE_PARM_DESC(dbg_msg, "Dump the QTEE response message");
+
 /* QTEE root object. */
 struct qcomtee_object qcomtee_object_root = {
 	.name = "root",
-	.object_type = QCOMTEE_OBJECT_TYPE_ROOT,
-	.info.qtee_id = QCOMTEE_MSG_OBJECT_ROOT,
+	.object_type = QCOMTEE_OBJECT_TYPE_ROOT,	.info.qtee_id = QCOMTEE_MSG_OBJECT_ROOT,
 };
 
 /* Next argument of type @type after index @i. */
@@ -34,9 +39,17 @@ int qcomtee_next_arg_type(struct qcomtee_arg *u, int i,
  * QTEE expects IDs with QCOMTEE_MSG_OBJECT_NS_BIT set for objects of
  * QCOMTEE_OBJECT_TYPE_CB type. The first ID with QCOMTEE_MSG_OBJECT_NS_BIT
  * set is reserved for the primordial object.
+ *
+ * QTEE builds/echoes local (kernel) object IDs as:
+ *   | 1 (1 bit) | Obj Id (15 bits) | srvr id (16 bits) |
+ * where server id 0 is the kernel object, 1 the memory region object, 2 the
+ * memory map object, 3..15 are reserved, and 0x10 and above are callback
+ * objects.  The credential object handed to ROOT for a client environment
+ * registration must be seen as a callback object, so start the local object
+ * id range at server id 0x10 instead of at 1.
  */
 #define QCOMTEE_OBJECT_PRIMORDIAL (QCOMTEE_MSG_OBJECT_NS_BIT)
-#define QCOMTEE_OBJECT_ID_START (QCOMTEE_OBJECT_PRIMORDIAL + 1)
+#define QCOMTEE_OBJECT_ID_START (QCOMTEE_OBJECT_PRIMORDIAL | 0x10)
 #define QCOMTEE_OBJECT_ID_END (U32_MAX)
 
 #define QCOMTEE_OBJECT_SET(p, type, ...) \
@@ -225,6 +238,10 @@ static int qcomtee_object_id_get(struct qcomtee_object_invoke_ctx *oic,
 			return -ENOSPC;
 
 		*object_id = idx;
+
+		if (object->name && !strcmp(object->name, "client-cred") &&
+		    qcomtee_dbg_msg)
+			pr_info("client-cred: sent to QTEE with id=0x%x\n", idx);
 
 		break;
 	case QCOMTEE_OBJECT_TYPE_ROOT:
@@ -645,6 +662,10 @@ static void qcomtee_cb_object_invoke(struct qcomtee_object_invoke_ctx *oic,
 	/* Filter bits used by transport. */
 	op = msg->op & QCOMTEE_MSG_OBJECT_OP_MASK;
 
+	if (qcomtee_dbg_msg)
+		pr_info("cb-invoke: id=0x%x op=0x%x obj=%s\n", object_id, op,
+			qcomtee_object_name(object));
+
 	switch (op) {
 	case QCOMTEE_MSG_OBJECT_OP_RELEASE:
 		qcomtee_object_id_put(oic, object_id);
@@ -689,7 +710,11 @@ qcomtee_object_invoke_ctx_invoke(struct qcomtee_object_invoke_ctx *oic,
 	u64 res;
 
 	tee_shm_get_pa(oic->out_shm, 0, &out_msg_paddr);
-	tee_shm_get_pa(oic->in_shm, 0, &in_msg_paddr);
+	if (oic->in_buf)
+		in_msg_paddr = qcom_tzmem_to_phys(oic->in_buf);
+	else
+		tee_shm_get_pa(oic->in_shm, 0, &in_msg_paddr);
+
 	if (!(oic->flags & QCOMTEE_OIC_FLAG_BUSY))
 		ret = qcom_scm_qtee_invoke_smc(in_msg_paddr, oic->in_msg.size,
 					       out_msg_paddr, oic->out_msg.size,
@@ -763,6 +788,11 @@ int qcomtee_object_do_invoke_internal(struct qcomtee_object_invoke_ctx *oic,
 
 		goto out;
 	}
+
+	if (qcomtee_dbg_msg)
+		print_hex_dump(KERN_INFO, "qteec-req: ", DUMP_PREFIX_OFFSET,
+			       16, 1, oic->in_msg.addr,
+			       min_t(size_t, oic->in_msg.size, 48), true);
 
 	/* Use input message buffer in 'oic'. */
 	cb_msg = oic->out_msg.addr;
@@ -841,6 +871,17 @@ int qcomtee_object_do_invoke_internal(struct qcomtee_object_invoke_ctx *oic,
 	}
 
 	qcomtee_fetch_async_reqs(oic);
+
+	if (qcomtee_dbg_msg) {
+		pr_info("qteec: final res_type=%llu ret=%d\n",
+			(unsigned long long)res_type, ret);
+		print_hex_dump(KERN_INFO, "qteec-res-in: ", DUMP_PREFIX_OFFSET,
+			       16, 1, oic->in_msg.addr,
+			       min_t(size_t, oic->in_msg.size, 48), true);
+		print_hex_dump(KERN_INFO, "qteec-res-out: ", DUMP_PREFIX_OFFSET,
+			       16, 1, oic->out_msg.addr,
+			       min_t(size_t, oic->out_msg.size, 48), true);
+	}
 out:
 	qcomtee_msg_buffers_free(oic);
 
@@ -849,8 +890,7 @@ out:
 
 int qcomtee_object_do_invoke(struct qcomtee_object_invoke_ctx *oic,
 			     struct qcomtee_object *object, u32 op,
-			     struct qcomtee_arg *u, int *result)
-{
+			     struct qcomtee_arg *u, int *result){
 	/* User can not set bits used by transport. */
 	if (op & ~QCOMTEE_MSG_OBJECT_OP_MASK)
 		return -EINVAL;
@@ -868,9 +908,232 @@ int qcomtee_object_do_invoke(struct qcomtee_object_invoke_ctx *oic,
 	return qcomtee_object_do_invoke_internal(oic, object, op, u, result);
 }
 
+/*
+ * Client credentials callback object.
+ *
+ * QTEE asks the object passed to ROOT op 2 (IClientEnv_registerAsClient) for
+ * the caller's credentials. This mirrors the reference implementation in
+ * libqcomtee (src/objects/credentials_obj.c):
+ *
+ *   op 0 (GET_LENGTH)      : one output buffer, returns the credential size.
+ *   op 1 (READ_AT_OFFSET)  : an input buffer with the offset and an output
+ *                            buffer, returns that slice of the credentials.
+ *
+ * The credentials are a CBOR map { 1: uid, 2: system time in ms }.
+ */
+#define QCOMTEE_CRED_OP_GET_LENGTH	0
+#define QCOMTEE_CRED_OP_READ_AT_OFFSET	1
+#define QCOMTEE_CRED_ATTR_UID		1
+#define QCOMTEE_CRED_ATTR_SYSTEM_TIME	2
+
+/* UID reported to QTEE in the credentials object. */
+static uint qcomtee_cred_uid;
+module_param_named(cred_uid, qcomtee_cred_uid, uint, 0644);
+MODULE_PARM_DESC(cred_uid, "UID reported in the QTEE client credentials object");
+
+/*
+ * Credentials content selector:
+ *   0 = CBOR {1: uid, 2: time in ms}   1 = CBOR {1: uid, 2: time in s}
+ *   2 = CBOR {1: uid}                  3 = CBOR {}
+ */
+static uint qcomtee_cred_mode;
+module_param_named(cred_mode, qcomtee_cred_mode, uint, 0644);
+MODULE_PARM_DESC(cred_mode, "Credentials object content selector");
+
+struct qcomtee_cred_cb {
+	struct qcomtee_object object;
+	u8 *blob;
+	size_t blob_len;
+};
+
+static size_t qcomtee_cred_cbor_uint(u8 *p, u64 v)
+{
+	int i;
+
+	if (v < 24) {
+		p[0] = v;
+
+		return 1;
+	}
+	if (v <= U8_MAX) {
+		p[0] = 0x18;
+		p[1] = v;
+
+		return 2;
+	}
+	if (v <= U16_MAX) {
+		p[0] = 0x19;
+		p[1] = v >> 8;
+		p[2] = v;
+
+		return 3;
+	}
+	if (v <= U32_MAX) {
+		p[0] = 0x1a;
+		for (i = 0; i < 4; i++)
+			p[1 + i] = v >> (8 * (3 - i));
+
+		return 5;
+	}
+	p[0] = 0x1b;
+	for (i = 0; i < 8; i++)
+		p[1 + i] = v >> (8 * (7 - i));
+
+	return 9;
+}
+
+static int qcomtee_cred_build_blob(struct qcomtee_cred_cb *cred)
+{
+	struct timespec64 ts;
+	u64 time_ms;
+	u8 *p;
+	size_t n = 0;
+
+	ktime_get_real_ts64(&ts);
+	time_ms = (u64)ts.tv_sec * 1000 + (u64)ts.tv_nsec / 1000000;
+
+	/* CBOR map { 1: uid, 2: system time }. */
+	p = kmalloc(1 + 2 * sizeof(u64) + 2, GFP_KERNEL);
+	if (!p)
+		return -ENOMEM;
+
+	if (qcomtee_cred_mode == 3) {
+		p[n++] = 0xa0; /* map(0) */
+		cred->blob = p;
+		cred->blob_len = n;
+
+		return 0;
+	}
+
+	if (qcomtee_cred_mode == 4) {
+		/* map(2) { 1: uid, 2: h'<15 bytes> } -> 20 bytes: tests multi-chunk reads. */
+		p[n++] = 0xa2;
+		n += qcomtee_cred_cbor_uint(p + n, QCOMTEE_CRED_ATTR_UID);
+		n += qcomtee_cred_cbor_uint(p + n, qcomtee_cred_uid);
+		p[n++] = 0x02;
+		p[n++] = 0x4f;
+		memset(p + n, 0, 15);
+		n += 15;
+
+		cred->blob = p;
+		cred->blob_len = n;
+
+		return 0;
+	}
+
+	p[n++] = 0xa2;
+	n += qcomtee_cred_cbor_uint(p + n, QCOMTEE_CRED_ATTR_UID);
+	n += qcomtee_cred_cbor_uint(p + n, qcomtee_cred_uid);
+
+	if (qcomtee_cred_mode != 2) {
+		n += qcomtee_cred_cbor_uint(p + n,
+					    QCOMTEE_CRED_ATTR_SYSTEM_TIME);
+		if (qcomtee_cred_mode == 1)
+			time_ms /= 1000;
+		n += qcomtee_cred_cbor_uint(p + n, time_ms);
+	} else {
+		p[0] = 0xa1; /* map(1) */
+	}
+
+	cred->blob = p;
+	cred->blob_len = n;
+
+	return 0;
+}
+
+static int
+qcomtee_cred_cb_dispatch(struct qcomtee_object_invoke_ctx *oic,
+			 struct qcomtee_object *object, u32 op,
+			 struct qcomtee_arg *args)
+{
+	struct qcomtee_cred_cb *cred =
+		container_of(object, struct qcomtee_cred_cb, object);
+	int i, nargs = 0;
+	size_t n;
+	u64 offset;
+
+	if (qcomtee_cred_mode == 99) {
+		pr_info("client-cred: op=0x%x -> refusing (diagnostic)\n", op);
+
+		return -EINVAL;
+	}
+
+	while (args[nargs].type != QCOMTEE_ARG_TYPE_INV)
+		nargs++;
+
+	if (qcomtee_dbg_msg)
+		pr_info("client-cred: op=0x%x nargs=%d len=%zu\n", op, nargs,
+			cred->blob_len);
+
+	if (qcomtee_dbg_msg) {
+		for (i = 0; i < nargs; i++) {
+			if (args[i].type == QCOMTEE_ARG_TYPE_IB ||
+			    args[i].type == QCOMTEE_ARG_TYPE_OB)
+				pr_info("  arg[%d] type=%d size=%zu\n", i,
+					args[i].type, args[i].b.size);
+			else
+				pr_info("  arg[%d] type=%d (object)\n", i,
+					args[i].type);
+		}
+	}
+
+	switch (op) {
+	case QCOMTEE_CRED_OP_GET_LENGTH:
+		/* Expect one argument: output buffer. */
+		if (nargs != 1 || args[0].type != QCOMTEE_ARG_TYPE_OB ||
+		    args[0].b.size < sizeof(u64))
+			return -EINVAL;
+
+		*(u64 *)args[0].b.addr = cred->blob_len;
+		args[0].b.size = sizeof(u64);
+
+		break;
+	case QCOMTEE_CRED_OP_READ_AT_OFFSET:
+		/* Expect two arguments: input and output buffer. */
+		if (nargs != 2 || args[0].type != QCOMTEE_ARG_TYPE_IB ||
+		    args[0].b.size < sizeof(u64) ||
+		    args[1].type != QCOMTEE_ARG_TYPE_OB)
+			return -EINVAL;
+
+		offset = *(u64 *)args[0].b.addr;
+		if (offset >= cred->blob_len)
+			return -EINVAL;
+
+		n = min_t(size_t, cred->blob_len - offset, args[1].b.size);
+		memcpy(args[1].b.addr, cred->blob + offset, n);
+		args[1].b.size = n;
+
+		if (qcomtee_dbg_msg)
+			pr_info("  read offset=%llu -> %zu bytes\n", offset, n);
+
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static void
+qcomtee_cred_cb_release(struct qcomtee_object *object)
+{
+	struct qcomtee_cred_cb *cred =
+		container_of(object, struct qcomtee_cred_cb, object);
+
+	kfree(cred->blob);
+	kfree(cred);
+}
+
+static struct qcomtee_object_operations qcomtee_cred_cb_ops = {
+	.release = qcomtee_cred_cb_release,
+	.dispatch = qcomtee_cred_cb_dispatch,
+};
+
 /**
- * qcomtee_object_get_client_env() - Get a privileged client env. object.
+ * qcomtee_object_get_client_env_impl() - Get a privileged client env. object.
  * @oic: context to use for the current invocation.
+ * @op: ROOT operation used to register the client environment.
+ * @use_cred: pass a callback object as credentials instead of a NULL object.
  *
  * The caller should call qcomtee_object_put() on the returned object
  * to release it.
@@ -879,21 +1142,54 @@ int qcomtee_object_do_invoke(struct qcomtee_object_invoke_ctx *oic,
  *         On success, returns the object.
  */
 struct qcomtee_object *
-qcomtee_object_get_client_env(struct qcomtee_object_invoke_ctx *oic)
+qcomtee_object_get_client_env_impl(struct qcomtee_object_invoke_ctx *oic,
+				   u32 op, bool use_cred)
 {
 	struct qcomtee_arg u[3] = { 0 };
+	struct qcomtee_cred_cb *cred = NULL;
 	int ret, result;
 
-	u[0].o = NULL_QCOMTEE_OBJECT;
+	if (use_cred) {
+		cred = kzalloc_obj(*cred);
+		if (!cred)
+			return NULL_QCOMTEE_OBJECT;
+		if (qcomtee_cred_build_blob(cred)) {
+			kfree(cred);
+
+			return NULL_QCOMTEE_OBJECT;
+		}
+		if (qcomtee_object_user_init(&cred->object,
+					     QCOMTEE_OBJECT_TYPE_CB,
+					     &qcomtee_cred_cb_ops,
+					     "client-cred")) {
+			kfree(cred->blob);
+			kfree(cred);
+
+			return NULL_QCOMTEE_OBJECT;
+		}
+
+		u[0].o = &cred->object;
+	} else {
+		u[0].o = NULL_QCOMTEE_OBJECT;
+	}
+
 	u[0].type = QCOMTEE_ARG_TYPE_IO;
 	u[1].type = QCOMTEE_ARG_TYPE_OO;
-	ret = qcomtee_object_do_invoke(oic, ROOT_QCOMTEE_OBJECT,
-				       QCOMTEE_ROOT_OP_REG_WITH_CREDENTIALS, u,
-				       &result);
-	if (ret || result)
+	ret = qcomtee_object_do_invoke(oic, ROOT_QCOMTEE_OBJECT, op, u, &result);
+	if (ret || result) {
+		pr_err("get_client_env: op=%u cred=%d ret=%d result=%d\n",
+		       op, use_cred, ret, result);
 		return NULL_QCOMTEE_OBJECT;
+	}
 
 	return u[1].o;
+}
+
+struct qcomtee_object *
+qcomtee_object_get_client_env(struct qcomtee_object_invoke_ctx *oic)
+{
+	return qcomtee_object_get_client_env_impl(oic,
+			QCOMTEE_ROOT_OP_REG_WITH_CREDENTIALS, true);
 }
 
 struct qcomtee_object *

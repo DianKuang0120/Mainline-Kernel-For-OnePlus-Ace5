@@ -42,6 +42,8 @@ struct csiphy_lanes_cfg {
 
 struct csiphy_csi2_cfg {
 	struct csiphy_lanes_cfg lane_cfg;
+	/* link is C-PHY (3 trios) instead of D-PHY */
+	bool is_cphy;
 };
 
 struct csiphy_config {

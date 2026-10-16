@@ -21,5 +21,6 @@ source "drivers/tee/optee/Kconfig"
 source "drivers/tee/amdtee/Kconfig"
 source "drivers/tee/tstee/Kconfig"
 source "drivers/tee/qcomtee/Kconfig"
+source "drivers/tee/qseecom/Kconfig"
 
 endif

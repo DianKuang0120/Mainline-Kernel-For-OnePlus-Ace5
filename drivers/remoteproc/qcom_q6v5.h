@@ -5,6 +5,7 @@
 
 #include <linux/kernel.h>
 #include <linux/completion.h>
+#include <linux/spinlock.h>
 #include <linux/soc/qcom/qcom_aoss.h>
 
 struct icc_path;
@@ -30,6 +31,8 @@ struct qcom_q6v5 {
 	int stop_irq;
 
 	bool handover_issued;
+	bool handover_irq_enabled;
+	spinlock_t handover_lock;
 
 	struct completion start_done;
 	struct completion stop_done;

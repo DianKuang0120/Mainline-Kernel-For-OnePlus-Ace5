@@ -59,8 +59,16 @@ config QCOM_KRYO_L2_ACCESSORS
 	depends on (ARCH_QCOM || COMPILE_TEST) && ARM64
 
 config QCOM_MDT_LOADER
-	tristate
+	tristate "Qualcomm MDT firmware loader"
+	depends on ARCH_QCOM || COMPILE_TEST
 	select QCOM_SCM
+	help
+	  Say y here to enable support for loading firmware in the Qualcomm
+	  MDT format: an ELF-like metadata file describing segments that are
+	  either carried in the same file or split out into .bNN files beside
+	  it. Drivers that load firmware into a Qualcomm remote processor or
+	  secure environment select this; it is also user-selectable so that
+	  it can be built for a consumer that only needs the parsing.
 
 config QCOM_OCMEM
 	tristate "Qualcomm On Chip Memory (OCMEM) driver"

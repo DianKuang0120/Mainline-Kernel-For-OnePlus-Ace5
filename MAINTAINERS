@@ -22338,6 +22338,13 @@ L:	linux-arm-msm@vger.kernel.org
 S:	Maintained
 F:	drivers/firmware/qcom/qcom_qseecom.c
 
+QUALCOMM QSEECOM TEE DRIVER
+M:	Dawid Wróbel <me@dawidwrobel.com>
+L:	linux-arm-msm@vger.kernel.org
+S:	Maintained
+F:	Documentation/tee/qseecom.rst
+F:	drivers/tee/qseecom/
+
 QUALCOMM QSEECOM UEFISECAPP DRIVER
 M:	Maximilian Luz <luzmaximilian@gmail.com>
 L:	linux-arm-msm@vger.kernel.org

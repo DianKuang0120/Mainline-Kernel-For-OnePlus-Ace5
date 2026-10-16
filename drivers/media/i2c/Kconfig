@@ -266,6 +266,16 @@ config VIDEO_IMX355
 	  To compile this driver as a module, choose M here: the
 	  module will be called imx355.
 
+config VIDEO_IMX906
+	tristate "Sony IMX906 sensor support"
+	help
+	  This is a Video4Linux2 sensor driver for the Sony
+	  IMX906 (LYT-700) camera.  Bring-up scaffold only: it powers
+	  the sensor and identifies it on the CCI bus.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called imx906.
+
 config VIDEO_IMX412
 	tristate "Sony IMX412 sensor support"
 	depends on OF

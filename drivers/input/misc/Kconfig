@@ -248,6 +248,23 @@ config INPUT_PMIC8XXX_PWRKEY
 	  To compile this driver as a module, choose M here: the
 	  module will be called pmic8xxx-pwrkey.
 
+config INPUT_GOODIX_FP_SPI
+	tristate "Goodix SPI fingerprint sensor driver"
+	depends on INPUT && OF_GPIO && NET
+	help
+	  Say Y here to enable the driver for Goodix SPI fingerprint
+	  sensors. It controls the sensor supply, reset and interrupt
+	  lines, and exposes the /dev/goodix_fp ioctl and netlink ABI the
+	  fingerprint HAL expects.
+
+	  Only sensors driven by a TrustZone application are currently
+	  supported. Their SPI bus belongs to the secure world, which
+	  captures and matches fingerprints there. Sensors the operating
+	  system drives itself need SPI transfers this driver does not
+	  currently implement.
+
+	  If unsure, say N.
+
 config INPUT_SPARCSPKR
 	tristate "SPARC Speaker support"
 	depends on PCI && SPARC64

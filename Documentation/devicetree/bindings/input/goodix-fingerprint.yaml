@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/input/goodix-fingerprint.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Goodix fingerprint sensor
+
+maintainers:
+  - Dawid Wróbel <me@dawidwrobel.com>
+
+description: >
+  A Goodix fingerprint sensor, described by the resources the operating system
+  drives: the sensor's supply, its reset line and its interrupt.
+
+  Where the sensor's SPI bus belongs to the secure world, image capture,
+  template construction and matching are performed there by a trusted
+  application, the SPI controller is not described to the operating system, and
+  this node is all of the sensor that the operating system sees.
+
+  The same properties describe the rest of the range. Only the compatibles
+  listed have been tested; others should be added as they are.
+
+properties:
+  compatible:
+    const: goodix,gf3626
+
+  interrupts:
+    maxItems: 1
+    description: Finger down and up events.
+
+  reset-gpios:
+    maxItems: 1
+
+  vdd-supply:
+    description: Sensor supply, kept enabled while the sensor is in use.
+
+  firmware-name:
+    maxItems: 1
+    description: >
+      Where the sensor is driven from the secure world, the name of the trusted
+      application that drives it, as loaded there. The pairing is a property of
+      the board rather than of the sensor part, because the application is built
+      and signed per device.
+
+required:
+  - compatible
+  - interrupts
+  - reset-gpios
+  - vdd-supply
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    fingerprint {
+        compatible = "goodix,gf3626";
+
+        interrupt-parent = <&tlmm>;
+        interrupts = <23 IRQ_TYPE_EDGE_RISING>;
+
+        reset-gpios = <&tlmm 125 GPIO_ACTIVE_LOW>;
+        vdd-supply = <&vreg_l10a_3p0>;
+
+        firmware-name = "gfenu";
+
+        pinctrl-names = "default";
+        pinctrl-0 = <&fp_int_default>;
+    };
