@@ -785,16 +785,23 @@
 
 /*
  * Cameras on giulia: 50MP main (Sony IMX906 / LYT-700), 8MP ultrawide
- * (Sony IMX355) and a 2MP macro, powered by the pm8010m rails.
+ * (Sony IMX355), 2MP macro (OmniVision OV02B10) and 16MP front
+ * (Sony IMX480), powered by the pm8010m rails.
  *
- * Bringup target: the ultrawide IMX355 (has a mainline driver).
- * Downstream truth (qcom,cam-sensor1): CCI0 master 0 (SDA/SCL gpio113/114),
- * CSI PHY0, MCLK2 (gpio102, 19.2 MHz), reset gpio14,
+ * Downstream truth for the ultrawide (qcom,cam-sensor1): CCI0 master 0
+ * (SDA/SCL gpio113/114), CSI PHY0, MCLK2 (gpio102, 19.2 MHz), reset gpio14,
  * vana 2.8V (pm8010m_l4), vdig 1.2V (pm_v6g_l2), vio 1.8V (pm8010m_l5).
+ *
+ * Downstream truth for the macro (qcom,cam-sensor2): CCI1 master 0,
+ * CSI PHY3 -> CSID2 (1 D-PHY lane, lane_assign 0x0), MCLK0 (gpio100,
+ * 24 MHz), reset gpio110, avdd 2.8V (pm8010m_l4), dovdd 1.8V (pm8010m_l5).
+ * The sensor answers at 7-bit address 0x3d (vendor 8-bit 0x7a).
  */
 &camss {
 	vdd-csiphy01-0p9-supply = <&vreg_l2i_0p88>;
 	vdd-csiphy01-1p2-supply = <&vreg_l3i_1p2>;
+	vdd-csiphy24-0p9-supply = <&vreg_l2i_0p88>;
+	vdd-csiphy24-1p2-supply = <&vreg_l3i_1p2>;
 	vdd-csiphy35-0p9-supply = <&vreg_l2i_0p88>;
 	vdd-csiphy35-1p2-supply = <&vreg_l3i_1p2>;
 
@@ -810,8 +817,23 @@
 
 		port@1 {
 			csiphy1_ep: endpoint {
+				bus-type = <MEDIA_BUS_TYPE_CSI2_CPHY>;
 				data-lanes = <0 1 2>;
 				remote-endpoint = <&imx906_ep>;
+			};
+		};
+
+		port@3 {
+			csiphy3_ep: endpoint {
+				data-lanes = <0>;
+				remote-endpoint = <&ov02b10_ep>;
+			};
+		};
+
+		port@4 {
+			csiphy4_ep: endpoint {
+				data-lanes = <0 1 2 3>;
+				remote-endpoint = <&imx480_ep>;
 			};
 		};
 	};
@@ -850,7 +872,7 @@
 	};
 };
 
-/* 50MP main: Sony IMX906 (LYT-700).  Bring-up scaffold (P1). */
+/* 50MP main: Sony IMX906 (LYT-700), C-PHY 3-trio. */
 &cci0_i2c1 {
 	imx906: camera@1a {
 		compatible = "sony,imx906";
@@ -888,8 +910,79 @@
 	status = "okay";
 };
 
-/* TODO: 50MP main (imx906) and 2MP macro sensors */
+/*
+ * 2MP macro: OmniVision OV02B10.
+ * Downstream (qcom,cam-sensor2) uses CCI1 master 0, CSIPHY3 -> CSID2,
+ * MCLK0 (gpio100, 24 MHz), reset gpio110, avdd 2.8 V, dovdd 1.8 V.
+ * The vendor sensor node has no reg; the CCI trace shows slave address
+ * 0x7a (8-bit), i.e. 0x3d in the 7-bit form used by Linux.
+ */
 &cci1_i2c0 {
+	/* The vendor drives this sensor in I2C fast mode (400 kHz). */
+	clock-frequency = <400000>;
+
+	ov02b10: camera@3d {
+		compatible = "ovti,ov02b10";
+		reg = <0x3d>;
+
+		clocks = <&camcc CAM_CC_MCLK0_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK0_CLK>;
+		assigned-clock-rates = <24000000>;
+		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
+
+		reset-gpios = <&tlmm 110 GPIO_ACTIVE_LOW>;
+		pinctrl-0 = <&cam0_default>;
+		pinctrl-1 = <&cam0_sleep>;
+		pinctrl-names = "default", "sleep";
+
+		avdd-supply = <&vreg_l4m_2p8>;
+		dovdd-supply = <&vreg_l5m_1p8>;
+
+		port {
+			ov02b10_ep: endpoint {
+				remote-endpoint = <&csiphy3_ep>;
+				data-lanes = <0>;
+				link-frequencies = /bits/ 64 <360000000>;
+			};
+		};
+	};
+};
+
+/*
+ * 16MP front camera: Sony IMX480 module (sensor reports IMX471 chip ID).
+ * On qupv3_2 i2c9 (0x884000), CSIPHY4, MCLK4 (gpio104), reset gpio7.
+ * The vendor 0x20 address is the 8-bit form; use 0x10 in Linux.
+ */
+&i2c9 {
+	status = "okay";
+	clock-frequency = <400000>;
+
+	imx480: camera@10 {
+		compatible = "sony,imx480";
+		reg = <0x10>;
+
+		clocks = <&camcc CAM_CC_MCLK4_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK4_CLK>;
+		assigned-clock-rates = <19200000>;
+		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
+
+		reset-gpios = <&tlmm 7 GPIO_ACTIVE_LOW>;
+		pinctrl-0 = <&cam4_default>;
+		pinctrl-1 = <&cam4_sleep>;
+		pinctrl-names = "default", "sleep";
+
+		avdd-supply = <&vreg_l4m_2p8>;
+		dvdd-supply = <&vreg_l2m_1p056>;
+		dovdd-supply = <&vreg_l5m_1p8>;
+
+		port {
+			imx480_ep: endpoint {
+				remote-endpoint = <&csiphy4_ep>;
+				data-lanes = <0 1 2 3>;
+				link-frequencies = /bits/ 64 <729600000>;
+			};
+		};
+	};
 };
 
 &gpi_dma1 {
@@ -1257,6 +1350,10 @@
 		vout-supply = <&panel_vout>;
 
 		reset-gpios = <&tlmm 133 GPIO_ACTIVE_LOW>;
+
+		/* HDR: DCI-P3 panel, 2000 nits peak (from vendor DT). */
+		hdr-enabled;
+		hdr-peak-brightness = <2000>;
 
 		pinctrl-names = "default", "sleep";
 		pinctrl-0 = <&disp0_reset_n_active>, <&mdp_vsync>;
@@ -1831,8 +1928,8 @@
 	    compatible = "gunyah-resource-manager";
 	    reg = <0x831f2ab7 0x189a43c1>,
 	          <0x831f2ab7 0x189a807c>;
-	    interrupts = <GIC_SPI 0x3a0 IRQ_TYPE_EDGE_RISING 0>,  /* 末尾多一个 0 */
+	    interrupts = <GIC_SPI 0x3a0 IRQ_TYPE_EDGE_RISING 0>,
 	                 <GIC_SPI 0x3a1 IRQ_TYPE_EDGE_RISING 0>;
-	};
     };
+};
 };

@@ -270,8 +270,9 @@ config VIDEO_IMX906
 	tristate "Sony IMX906 sensor support"
 	help
 	  This is a Video4Linux2 sensor driver for the Sony
-	  IMX906 (LYT-700) camera.  Bring-up scaffold only: it powers
-	  the sensor and identifies it on the CCI bus.
+	  IMX906 (LYT-700) camera, as found on the OnePlus 13R / Ace 5.
+	  It supports 4096x3072 RAW10 streaming over the SM8650 C-PHY
+	  front-end (CSIPHY1 -> CSID0 -> VFE0 RDI).
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called imx906.
@@ -296,6 +297,16 @@ config VIDEO_IMX415
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called imx415.
+
+config VIDEO_IMX480
+	tristate "Sony IMX480 sensor support"
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the Sony
+	  IMX480 camera module.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called imx480.
 
 config VIDEO_MAX9271_LIB
 	tristate
@@ -411,6 +422,16 @@ config VIDEO_OV02A10
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called ov02a10.
+
+config VIDEO_OV02B10
+	tristate "OmniVision OV02B10 sensor support"
+	select V4L2_CCI_I2C
+	help
+	  This is a Video4Linux2 sensor driver for the OmniVision
+	  OV02B10 camera.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ov02b10.
 
 config VIDEO_OV02E10
 	tristate "OmniVision OV02E10 sensor support"

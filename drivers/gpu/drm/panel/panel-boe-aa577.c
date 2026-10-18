@@ -2,16 +2,20 @@
 /*
  * BOE AA577-P-3-A0020 AMOLED panel as found in OnePlus 13R / Ace 5 (giulia).
  *
- * Copyright (c) 2026, Oleg Peshkov
+ * Copyright (c) 2026, DianKuang
  */
 
 #include <linux/backlight.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
+#include <linux/hdmi.h>
+#include <linux/kstrtox.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <linux/property.h>
 #include <linux/regulator/consumer.h>
 #include <linux/string.h>
+#include <linux/sysfs.h>
 
 #include <video/mipi_display.h>
 
@@ -19,6 +23,7 @@
 #include <drm/display/drm_dsc_helper.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc.h>
+#include <drm/drm_edid.h>
 #include <drm/drm_mipi_dsi.h>
 #include <drm/drm_modes.h>
 #include <drm/drm_panel.h>
@@ -31,6 +36,9 @@ struct panel_aa577_p_3_a0020_dsc {
 	struct regulator_bulk_data supplies[3];
 	struct gpio_desc *reset_gpio;
 	struct drm_connector *connector;
+	int hbm_mode;
+	bool hdr_enabled;
+	u32 hdr_peak_brightness;
 };
 
 static inline
@@ -1380,6 +1388,46 @@ static int panel_aa577_p_3_a0020_dsc_unprepare(struct drm_panel *panel)
 	return 0;
 }
 
+/*
+ * Synthesized EDID for this panel.  A DSI panel has no EDID of its own, but
+ * userspace compositors (e.g. KWin) only discover HDR support from the
+ * connector EDID, so expose one describing the actual panel:
+ *
+ *  - DCI-P3 primaries with a D65 white point (taken from the vendor DT
+ *    "qcom,mdss-dsi-panel-hdr-color-primaries")
+ *  - CTA-861 HDR Static Metadata: SDR + SMPTE ST2084 (HDR10), 2000 nits
+ *    peak, 200 nits max frame-average
+ *  - BT.2020 RGB/YCC colorimetry
+ *  - preferred mode 1264x2780@120
+ *
+ * Only the EDID blob is exposed to userspace; the panel mode list still
+ * comes from ->get_modes().
+ */
+static const u8 panel_aa577_p_3_a0020_edid[] = {
+	0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x09, 0xe5, 0x77, 0xa5,
+	0x01, 0x00, 0x00, 0x00, 0x01, 0x24, 0x01, 0x04, 0xb0, 0x07, 0x0f, 0x78,
+	0x02, 0x0f, 0x91, 0xae, 0x52, 0x43, 0xb0, 0x26, 0x0f, 0x50, 0x54, 0x00,
+	0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+	0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x0e, 0xb2, 0xf0, 0x36, 0x40, 0xdc,
+	0x66, 0xa0, 0x1a, 0x02, 0xa2, 0x0c, 0x47, 0x9d, 0x00, 0x00, 0x00, 0x1e,
+	0x00, 0x00, 0x00, 0xfc, 0x00, 0x41, 0x41, 0x35, 0x37, 0x37, 0x2d, 0x50,
+	0x2d, 0x33, 0x0a, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0xff, 0x00, 0x41,
+	0x30, 0x30, 0x32, 0x30, 0x0a, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+	0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xdc, 0x02, 0x03, 0x0f, 0x00,
+	0xe3, 0x05, 0xc0, 0x00, 0xe6, 0x06, 0x05, 0x01, 0xaa, 0x40, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x68,
+};
+
 static int panel_aa577_p_3_a0020_dsc_get_modes(struct drm_panel *panel,
 					       struct drm_connector *connector)
 {
@@ -1396,10 +1444,45 @@ static int panel_aa577_p_3_a0020_dsc_get_modes(struct drm_panel *panel,
 		drm_mode_probed_add(connector, mode);
 	}
 
+	/*
+	 * Expose the synthesized EDID so that userspace can discover the HDR
+	 * capabilities of the panel.  This must happen before the display_info
+	 * fields below, as it resets and repopulates them from the EDID.
+	 */
+	if (ctx->hdr_enabled)
+		drm_connector_update_edid_property(connector,
+				(const struct edid *)panel_aa577_p_3_a0020_edid);
+
 	connector->display_info.width_mm =
 		panel_aa577_p_3_a0020_dsc_modes[0].width_mm;
 	connector->display_info.height_mm =
 		panel_aa577_p_3_a0020_dsc_modes[0].height_mm;
+
+	/* The panel is driven over 4 lanes with 10 bits per component. */
+	connector->display_info.bpc = 10;
+
+	if (ctx->hdr_enabled) {
+		struct hdr_sink_metadata *hdr =
+			&connector->display_info.hdr_sink_metadata;
+
+		/*
+		 * Advertise HDR10 (ST 2084) plus traditional gamma SDR support.
+		 * There is no EDID for this panel, so fill the sink metadata in
+		 * directly from the panel capabilities.
+		 */
+		hdr->hdmi_type1.metadata_type = BIT(HDMI_STATIC_METADATA_TYPE1);
+		hdr->hdmi_type1.eotf = BIT(HDMI_EOTF_TRADITIONAL_GAMMA_SDR) |
+				       BIT(HDMI_EOTF_SMPTE_ST2084);
+
+		/*
+		 * Peak luminance in nits. The minimum luminance of the panel
+		 * (0.4 nits) rounds down to 0 with the u32 nits units used by
+		 * DRM, so leave it at 0.
+		 */
+		connector->display_info.luminance_range.min_luminance = 0;
+		connector->display_info.luminance_range.max_luminance =
+			ctx->hdr_peak_brightness;
+	}
 
 	ctx->connector = connector;
 
@@ -1465,6 +1548,93 @@ panel_aa577_p_3_a0020_dsc_create_backlight(struct mipi_dsi_device *dsi)
 					      &panel_aa577_p_3_a0020_dsc_bl_ops, &props);
 }
 
+/*
+ * The panel's HBM sequence is used for under-display fingerprint capture.
+ * It is taken from the vendor DT:
+ *
+ *   39 00 00 40 00 00 04 ff 5a a5 1e
+ *   39 00 00 40 00 00 02 80 89
+ *   39 00 00 40 00 00 04 ff 5a a5 00
+ *   39 00 00 00 00 00 03 51 0f 4a
+ *
+ * mode 0: normal (vendor hbm-off, 0x51 0x0dbb)
+ * mode 1: HBM on (0x51 0x0f4a)
+ * mode 2: HBM max (0x51 0x10ed)
+ */
+static int panel_aa577_p_3_a0020_dsc_hbm_set(
+	struct panel_aa577_p_3_a0020_dsc *ctx, int mode)
+{
+	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
+	u32 mode_flags;
+	int ret;
+
+	if (mode < 0 || mode > 2)
+		return -EINVAL;
+	if (ctx->hbm_mode == mode)
+		return 0;
+
+	mode_flags = ctx->dsi->mode_flags;
+	ctx->dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+
+	if (!mode) {
+		if (ctx->hbm_mode == 2)
+			mipi_dsi_dcs_write_seq_multi(&dsi_ctx,
+						     0x51, 0x0f, 0xfe);
+		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x51, 0x0d, 0xbb);
+	} else {
+		mipi_dsi_dcs_write_seq_multi(&dsi_ctx,
+					     0xff, 0x5a, 0xa5, 0x1e);
+		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x80, 0x89);
+		mipi_dsi_dcs_write_seq_multi(&dsi_ctx,
+					     0xff, 0x5a, 0xa5, 0x00);
+		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x51, 0x0f, 0x4a);
+		if (mode == 2)
+			mipi_dsi_dcs_write_seq_multi(&dsi_ctx,
+						     0x51, 0x10, 0xed);
+	}
+
+	ret = dsi_ctx.accum_err;
+	ctx->dsi->mode_flags = mode_flags;
+	if (!ret)
+		ctx->hbm_mode = mode;
+	return ret;
+}
+
+static ssize_t hbm_show(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	struct panel_aa577_p_3_a0020_dsc *ctx = dev_get_drvdata(dev);
+
+	if (!ctx)
+		return -ENODEV;
+	return sysfs_emit(buf, "%d\n", ctx->hbm_mode);
+}
+
+static ssize_t hbm_store(struct device *dev, struct device_attribute *attr,
+			 const char *buf, size_t count)
+{
+	struct panel_aa577_p_3_a0020_dsc *ctx = dev_get_drvdata(dev);
+	int mode, ret;
+
+	if (!ctx)
+		return -ENODEV;
+	if (kstrtoint(buf, 0, &mode))
+		return -EINVAL;
+	ret = panel_aa577_p_3_a0020_dsc_hbm_set(ctx, mode);
+	return ret ? ret : count;
+}
+
+static DEVICE_ATTR_RW(hbm);
+
+static struct attribute *panel_aa577_hbm_attrs[] = {
+	&dev_attr_hbm.attr,
+	NULL,
+};
+
+static const struct attribute_group panel_aa577_hbm_group = {
+	.attrs = panel_aa577_hbm_attrs,
+};
+
 static int panel_aa577_p_3_a0020_dsc_probe(struct mipi_dsi_device *dsi)
 {
 	struct device *dev = &dsi->dev;
@@ -1492,6 +1662,15 @@ static int panel_aa577_p_3_a0020_dsc_probe(struct mipi_dsi_device *dsi)
 
 	ctx->dsi = dsi;
 	mipi_dsi_set_drvdata(dsi, ctx);
+
+	ctx->hdr_enabled = device_property_read_bool(dev, "hdr-enabled");
+	if (ctx->hdr_enabled)
+		device_property_read_u32(dev, "hdr-peak-brightness",
+					 &ctx->hdr_peak_brightness);
+
+	ret = devm_device_add_group(dev, &panel_aa577_hbm_group);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to add HBM attribute\n");
 
 	dsi->lanes = 4;
 	dsi->format = MIPI_DSI_FMT_RGB101010;
@@ -1560,6 +1739,6 @@ static struct mipi_dsi_driver panel_aa577_p_3_a0020_dsc_driver = {
 };
 module_mipi_dsi_driver(panel_aa577_p_3_a0020_dsc_driver);
 
-MODULE_AUTHOR("Oleg Peshkov <olegos.wst@gmail.com>");
+MODULE_AUTHOR("DianKuang <diankuang114514@gmail.com>");
 MODULE_DESCRIPTION("DRM driver for AA577 P 3 A0020 dsc cmd mode panel");
 MODULE_LICENSE("GPL");

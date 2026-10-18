@@ -11,7 +11,7 @@
  * Based on the downstream sipa driver:
  *   Copyright (C) 2018 SI-IN, Yun Shi (yun.shi@si-in.com)
  *
- * Copyright (c) 2026, Oleg Peshkov
+ * Copyright (c) 2026, DianKuang
  */
 
 #include <linux/crc32.h>
@@ -544,7 +544,7 @@ static struct i2c_driver sia91xx_i2c_driver = {
 };
 module_i2c_driver(sia91xx_i2c_driver);
 
-MODULE_AUTHOR("Oleg Peshkov <olegos.wst@gmail.com>");
+MODULE_AUTHOR("DianKuang <diankuang114514@gmail.com>");
 MODULE_DESCRIPTION("ASoC SI-IN SIA91xx smart amplifier driver");
 MODULE_FIRMWARE(SIA91XX_FW_DEFAULT);
 MODULE_LICENSE("GPL");

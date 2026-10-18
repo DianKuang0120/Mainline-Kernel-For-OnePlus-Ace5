@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Sony IMX906 (marketed as LYT-700) - 50MP sensor, bring-up driver.
+ * Sony IMX906 (marketed as LYT-700) - 50MP sensor driver.
  *
  * The register tables were captured at runtime from stock Android through the
  * OPLUS camera kernel's CAM_CCI debug (see camera-android-capture/):
@@ -144,6 +144,7 @@ static int imx906_write_table(struct imx906 *s, const struct imx906_reg *t,
 		if (ret)
 			return dev_err_probe(s->dev, ret,
 					     "write 0x%04x failed\n", t[i].addr);
+		usleep_range(100, 200);
 	}
 	return 0;
 }
@@ -179,6 +180,12 @@ static int imx906_read_reg8(struct imx906 *s, u16 reg, u8 *val)
 static int imx906_power_on(struct imx906 *s)
 {
 	int ret;
+
+	/* The sensor PLL is specified for a 19.2 MHz input clock. */
+	ret = clk_set_rate(s->clk, 19200000);
+	if (ret)
+		dev_warn(s->dev, "clk_set_rate(19.2M) failed: %d\n", ret);
+	dev_info(s->dev, "MCLK = %lu Hz\n", clk_get_rate(s->clk));
 
 	ret = clk_prepare_enable(s->clk);
 	if (ret)
@@ -218,6 +225,74 @@ static int imx906_identify(struct imx906 *s)
 	return 0;
 }
 
+/*
+ * The module EEPROM carries 3072 bytes of per-unit QSC (lens shading)
+ * calibration at offset 0x2210.  The vendor writes it to sensor register
+ * 0x1000 before streaming.  Do the same, but in 8-byte chunks because the
+ * CCI adapter rejects longer transfers.
+ */
+#define IMX906_QSC_REG		0x1000
+#define IMX906_QSC_SIZE		3072
+#define IMX906_QSC_EEPROM	0x2210
+#define IMX906_EEPROM_ADDR	0x50
+#define IMX906_QSC_CHUNK	8
+
+static int imx906_read_eeprom(struct imx906 *s, u16 addr, u8 *buf, size_t len)
+{
+	size_t off;
+
+	for (off = 0; off < len; off += IMX906_QSC_CHUNK) {
+		size_t n = min_t(size_t, IMX906_QSC_CHUNK, len - off);
+		u16 a = addr + off;
+		u8 ab[2] = { a >> 8, a & 0xff };
+		struct i2c_msg msgs[2] = {
+			{ .addr = IMX906_EEPROM_ADDR, .flags = 0,
+			  .len = 2, .buf = ab },
+			{ .addr = IMX906_EEPROM_ADDR, .flags = I2C_M_RD,
+			  .len = n, .buf = buf + off },
+		};
+
+		if (i2c_transfer(s->client->adapter, msgs, 2) != 2)
+			return -EIO;
+	}
+
+	return 0;
+}
+
+static int imx906_write_qsc(struct imx906 *s)
+{
+	u8 *buf;
+	int ret = 0;
+	size_t off;
+
+	buf = kmalloc(IMX906_QSC_SIZE, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	ret = imx906_read_eeprom(s, IMX906_QSC_EEPROM, buf, IMX906_QSC_SIZE);
+	if (ret)
+		goto out;
+
+	for (off = 0; off < IMX906_QSC_SIZE; off += IMX906_QSC_CHUNK) {
+		u16 a = IMX906_QSC_REG + off;
+		u8 msg[2 + IMX906_QSC_CHUNK] = { a >> 8, a & 0xff };
+		struct i2c_msg m = {
+			.addr = s->client->addr, .flags = 0,
+			.len = 2 + IMX906_QSC_CHUNK, .buf = msg,
+		};
+
+		memcpy(msg + 2, buf + off, IMX906_QSC_CHUNK);
+		if (i2c_transfer(s->client->adapter, &m, 1) != 1) {
+			ret = -EIO;
+			goto out;
+		}
+	}
+
+out:
+	kfree(buf);
+	return ret;
+}
+
 /* ---- V4L2 subdev ---- */
 
 static int imx906_set_stream(struct v4l2_subdev *sd, int enable)
@@ -235,21 +310,22 @@ static int imx906_set_stream(struct v4l2_subdev *sd, int enable)
 		if (ret)
 			goto err;
 
-		/* The PHY mode / lane count the part actually ended up in. */
-		{
-			u8 sig = 0, lanes = 0;
-			if (!imx906_read_reg8(s, 0x0111, &sig) &&
-			    !imx906_read_reg8(s, 0x0114, &lanes))
-				dev_info(s->dev,
-					 "init done: CSI_SIGNALING_MODE(0x0111)=0x%02x (%s), lanes-1(0x0114)=0x%02x\n",
-					 sig, sig == 0x02 ? "D-PHY" : "not D-PHY",
-					 lanes);
-		}
+		ret = imx906_write_qsc(s);
+		if (ret)
+			dev_warn(s->dev, "QSC calibration unavailable: %d\n", ret);
+
+		/*
+		 * The vendor has per-register delays that the CCI capture does not
+		 * record; give the PLL/mode writes time to settle before the
+		 * stream-on trigger.
+		 */
+		usleep_range(5000, 6000);
 
 		ret = imx906_write_table(s, imx906_start_regs,
 					 ARRAY_SIZE(imx906_start_regs));
 		if (ret)
 			goto err;
+		usleep_range(5000, 6000);
 	} else {
 		ret = imx906_write_reg(s, IMX906_REG_STREAM, 0x00);
 		pm_runtime_put(s->dev);

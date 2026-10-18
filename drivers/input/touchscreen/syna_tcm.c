@@ -9,7 +9,7 @@
  * (synaptics_touchcom_core_v1.c):
  *   Copyright (C) 2017-2020 Synaptics Incorporated
  *
- * Copyright (c) 2026, Oleg Peshkov
+ * Copyright (c) 2026, DianKuang
  */
 
 #include <linux/delay.h>
@@ -876,6 +876,6 @@ static struct spi_driver syna_tcm_driver = {
 };
 module_spi_driver(syna_tcm_driver);
 
-MODULE_AUTHOR("Oleg Peshkov <olegos.wst@gmail.com>");
+MODULE_AUTHOR("DianKuang <diankuang114514@gmail.com>");
 MODULE_DESCRIPTION("Synaptics TouchComm TCM v1 SPI touchscreen driver");
 MODULE_LICENSE("GPL");

@@ -1292,6 +1292,7 @@ static int csid_link_setup(struct media_entity *entity,
 			lane_cfg = &csiphy->cfg.csi2->lane_cfg;
 			csid->phy.lane_cnt = lane_cfg->num_data;
 			csid->phy.lane_assign = csid_get_lane_assign(lane_cfg, lane_cfg->num_data);
+			csid->phy.is_cphy = csiphy->cfg.csi2->is_cphy;
 			csid->tpg_linked = false;
 		}
 	}

@@ -59,6 +59,7 @@
 #define		RUP_DONE_IRQ_STATUS		BIT(23)
 
 #define CSID_CSI2_RDIN_IRQ_CLEAR(rdi)	(0xF4 + 0x10 * (rdi))
+#define CSID_CSI2_RDIN_IRQ_MASK(rdi)	(0xF0 + 0x10 * (rdi))
 #define CSID_CSI2_RDIN_IRQ_SET(rdi)	(0xF8 + 0x10 * (rdi))
 
 #define CSID_CSI2_RX_CFG0		0x200
@@ -66,6 +67,8 @@
 #define		CSI2_RX_CFG0_VC_MODE		3
 #define		CSI2_RX_CFG0_DL0_INPUT_SEL	4
 #define		CSI2_RX_CFG0_PHY_NUM_SEL	20
+/* 0 = D-PHY, 1 = C-PHY (OPLUS: phy_type_shift = 24) */
+#define		CSI2_RX_CFG0_PHY_TYPE_SEL	BIT(24)
 #define		CSI2_RX_CFG0_TPG_MUX_EN		BIT(27)
 #define		CSI2_RX_CFG0_TPG_MUX_SEL	GENMASK(29, 28)
 
@@ -116,6 +119,8 @@ static void __csid_configure_rx(struct csid_device *csid,
 	camss = csid->camss;
 	val = (phy->lane_cnt - 1) << CSI2_RX_CFG0_NUM_ACTIVE_LANES;
 	val |= phy->lane_assign << CSI2_RX_CFG0_DL0_INPUT_SEL;
+	if (phy->is_cphy)
+		val |= CSI2_RX_CFG0_PHY_TYPE_SEL;
 
 	if (camss->tpg && csid->tpg_linked &&
 	    camss->tpg[phy->csiphy_id].testgen.mode != TPG_PAYLOAD_MODE_DISABLED) {
@@ -127,6 +132,10 @@ static void __csid_configure_rx(struct csid_device *csid,
 	}
 
 	writel(val, csid->base + CSID_CSI2_RX_CFG0);
+	dev_dbg(csid->camss->dev,
+		"csid%d rx_cfg0 wrote=0x%08x read=0x%08x (is_cphy=%d lanes=%u assign=0x%x csiphy=%u)\n",
+		 csid->id, val, readl(csid->base + CSID_CSI2_RX_CFG0),
+		 phy->is_cphy, phy->lane_cnt, phy->lane_assign, phy->csiphy_id);
 
 	val = CSI2_RX_CFG1_ECC_CORRECTION_EN;
 	if (vc > 3)
@@ -269,6 +278,11 @@ static irqreturn_t csid_isr(int irq, void *dev)
 
 	val = readl(csid->base + CSID_CSI2_RX_IRQ_STATUS);
 	writel(val, csid->base + CSID_CSI2_RX_IRQ_CLEAR);
+	if (val && csid->phy.is_cphy && csid->rx_irq_dbg < 20) {
+		dev_dbg(csid->camss->dev, "csid%d RX_IRQ_STATUS=0x%08x\n",
+			csid->id, val);
+		csid->rx_irq_dbg++;
+	}
 
 	buf_done_val = readl(csid->base + CSID_BUF_DONE_IRQ_STATUS);
 	writel(buf_done_val, csid->base + CSID_BUF_DONE_IRQ_CLEAR);
@@ -283,6 +297,11 @@ static irqreturn_t csid_isr(int irq, void *dev)
 				/* clear the reg update bit */
 				csid_subdev_reg_update(csid, i, true);
 
+			if (csid->phy.is_cphy && i == 0 && csid->rdi_irq_dbg < 20 && val) {
+				dev_dbg(csid->camss->dev,
+					"csid%d RDI0_IRQ_STATUS=0x%08x\n", csid->id, val);
+				csid->rdi_irq_dbg++;
+			}
 			if (buf_done_val & BIT(BUF_DONE_IRQ_STATUS_RDI_OFFSET + i)) {
 				/*
 				 * For Titan Gen3, bus done and RUP IRQ have been moved to
@@ -319,6 +338,14 @@ static int csid_reset(struct csid_device *csid)
 	writel(1, csid->base + CSID_TOP_IRQ_CLEAR);
 	writel(1, csid->base + CSID_IRQ_CMD);
 	writel(1, csid->base + CSID_TOP_IRQ_MASK);
+	/*
+	 * Diagnostic: unmask the CSI2 RX error interrupts and the RDI path
+	 * interrupts so the ISR can log what the CSID actually sees.
+	 */
+	writel(0, csid->base + CSID_CSI2_RX_IRQ_MASK);
+	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++)
+		if (csid->phy.en_vc & BIT(i))
+			writel(0, csid->base + CSID_CSI2_RDIN_IRQ_MASK(i));
 
 	for (i = 0; i < MSM_CSID_MAX_SRC_STREAMS; i++)
 		if (csid->phy.en_vc & BIT(i)) {

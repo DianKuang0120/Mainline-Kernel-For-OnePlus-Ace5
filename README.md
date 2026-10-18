@@ -12,7 +12,7 @@
 | Accelerometer        | SSC icm456xx via FastRPC/libssc | ✅    |
 | Gyroscope            | SSC icm456xx via libssc | ✅    |
 | Magnetometer         | SSC mmc56x3x via FastRPC/libssc | ✅    |
-| Fingerprint          |                         | ❌    |
+| Fingerprint          | `uff_jv` TA loads and INIT succeeds; sensor instance blocked by single-slot QSEEComCompat app-loader (needs multi-region container) | ❌ |
 | NFC                  | nxp-nci                 | ✅    |
 | Thermals             |                         | ✅    |
 | Battery              |                         | ✅    |
@@ -25,14 +25,14 @@
 | Gunyah               |                         | ✅    |
 | Touchscreen          | Off-tree                | ✅    |
 | Bluetooth            | Uses controller default MAC | ✅    |
-| GPS                  |                         | ❌    |
+| GPS                  | QMI LOC master shim -> NMEA socket -> Geoclue/KDE; satellite fix works (accuracy metadata still 0) | ⚠️   |
 | Speakers             | Off-tree                | ✅    |
 | Microphones          | WCD9395 analog mics: bottom(main)+top(sec) stereo, headset (UCM) | ✅    |
 | GPU                  |                         | ✅    |
-| Camera               | Ultrawide IMX355 via camss (RAW capture); main/macro no driver | ⚠️ |
+| Camera               | Ultrawide IMX355 + main IMX906 (RAW 4096x3072 via CSIPHY1/CSID0/VFE0); front IMX480 driver probes but no CSI frames; 2MP macro OV02B10 DT added (CSIPHY3/CSID2/VFE2) | ⚠️ |
 | Flash                | pm8350c flash-led       | ✅    |
-| Calls                | VoLTE: PDC profile active; needs AP IMS stack (OpenIMSd) | ❌ |
-| SMS                  | Receive works; send fails (QMI WMS 56) | ⚠️ |
+| Calls                | VoLTE/IMS registration + PDN work; in-call audio still missing (AGM voice session) | ⚠️ |
+| SMS                  | Send/receive over IMS works (DCM/OpenIMSd; self-SMS end-to-end tested) | ✅ |
 | Mobile Data          | IPA sm8650 consumer endpoints 17/22/24 | ✅ |
 | Display              | Off-tree                | ✅    |
 | Haptics              | driver + userspace event daemon | ✅    |

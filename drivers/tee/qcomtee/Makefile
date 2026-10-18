@@ -7,4 +7,3 @@ qcomtee-objs += mem_obj.o
 qcomtee-objs += primordial_obj.o
 qcomtee-objs += shm.o
 qcomtee-objs += user_obj.o
-qcomtee-objs += qseecom_compat.o

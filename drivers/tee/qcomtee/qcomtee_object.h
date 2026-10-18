@@ -165,9 +165,7 @@ struct qcomtee_object_invoke_ctx {
 
 	struct qcomtee_buffer in_msg;
 	struct qcomtee_buffer out_msg;
-	struct tee_shm *in_shm;		/* inbound buffer when small */
-	void *in_buf;		/* inbound buffer, from qcom_tzmem when large */
-	void *in_pool;		/* qcom_tzmem pool backing in_buf */
+	struct tee_shm *in_shm;
 	struct tee_shm *out_shm;
 
 	void *data;
@@ -310,11 +308,6 @@ int qcomtee_next_arg_type(struct qcomtee_arg *u, int i,
 
 struct qcomtee_object *
 qcomtee_object_get_client_env(struct qcomtee_object_invoke_ctx *oic);
-
-/* Variant used by the QSEECOM compatibility probe to test root registrations. */
-struct qcomtee_object *
-qcomtee_object_get_client_env_impl(struct qcomtee_object_invoke_ctx *oic,
-				   u32 op, bool use_cred);
 
 struct qcomtee_object *
 qcomtee_object_get_service(struct qcomtee_object_invoke_ctx *oic,

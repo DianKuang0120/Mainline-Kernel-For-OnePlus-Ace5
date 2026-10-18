@@ -810,15 +810,15 @@ csiphy_lane_regs lane_regs_sm8650_cphy[] = {
 	{0x02F4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x02F8, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x02FC, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
-	{0x02F0, 0xEF, 0xd3, CSIPHY_DEFAULT_PARAMS},
+	{0x02F0, 0xEF, 0xD3, CSIPHY_DEFAULT_PARAMS},
 	{0x06F4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x06F8, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x06FC, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
-	{0x06F0, 0xEF, 0xd3, CSIPHY_DEFAULT_PARAMS},
+	{0x06F0, 0xEF, 0xD3, CSIPHY_DEFAULT_PARAMS},
 	{0x0AF4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0AF8, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0AFC, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
-	{0x0AF0, 0xEF, 0xd3, CSIPHY_DEFAULT_PARAMS},
+	{0x0AF0, 0xEF, 0xD3, CSIPHY_DEFAULT_PARAMS},
 	{0x0204, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x02E4, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x02E8, 0x7F, 0x00, CSIPHY_DEFAULT_PARAMS},
@@ -876,6 +876,42 @@ csiphy_lane_regs lane_regs_sm8650_cphy[] = {
 	{0x0A60, 0xA8, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0A84, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 	{0x0A90, 0x02, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0268, 0xF1, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0294, 0x01, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0278, 0x14, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0288, 0x20, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x026C, 0x2B, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x028C, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0270, 0x03, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0274, 0x03, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0668, 0xF1, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0694, 0x01, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0678, 0x14, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0688, 0x20, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x066C, 0x2B, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x068C, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0670, 0x03, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0674, 0x03, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A68, 0xF1, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A94, 0x01, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A78, 0x14, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A88, 0x20, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A6C, 0x2B, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A8C, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A70, 0x03, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A74, 0x03, 0x0A, CSIPHY_DEFAULT_PARAMS},
+	{0x020C, 0x1E, 0x00, CSIPHY_SETTLE_CNT_LOWER_BYTE},
+	{0x0208, 0x00, 0x00, CSIPHY_SETTLE_CNT_HIGHER_BYTE},
+	{0x0210, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0214, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x060C, 0x1E, 0x00, CSIPHY_SETTLE_CNT_LOWER_BYTE},
+	{0x0608, 0x00, 0x00, CSIPHY_SETTLE_CNT_HIGHER_BYTE},
+	{0x0610, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0614, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A0C, 0x1E, 0x00, CSIPHY_SETTLE_CNT_LOWER_BYTE},
+	{0x0A08, 0x00, 0x00, CSIPHY_SETTLE_CNT_HIGHER_BYTE},
+	{0x0A10, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
+	{0x0A14, 0x00, 0x00, CSIPHY_DEFAULT_PARAMS},
 };
 
 
@@ -1255,11 +1291,22 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 	int i;
 
 	settle_cnt = csiphy_settle_cnt_calc(link_freq, csiphy->timer_clk_rate);
+	/* The OPLUS front camera (IMX480 on CSIPHY4) uses settle count 26. */
+	if (csiphy->id == 4)
+		settle_cnt = 26;
+	if (cfg->csi2 && cfg->csi2->is_cphy) {
+		/*
+		 * OPLUS computes the C-PHY settle count as
+		 * settle_time / 200000000; Android reports settle_time
+		 * 5600000000 for this mode, i.e. 28.
+		 */
+		settle_cnt = 28;
+	}
 
-	dev_info(csiphy->camss->dev,
-		 "csiphy%d lanes_enable: is_cphy=%d lane_mask=0x%02x settle=%u\n",
-		 csiphy->id, cfg->csi2 ? cfg->csi2->is_cphy : -1,
-		 lane_mask, settle_cnt);
+	dev_dbg(csiphy->camss->dev,
+		"csiphy%d lanes_enable: is_cphy=%d lane_mask=0x%02x settle=%u\n",
+		csiphy->id, cfg->csi2 ? cfg->csi2->is_cphy : -1,
+		lane_mask, settle_cnt);
 
 	if (csiphy->cfg.csi2->is_cphy) {
 		/*
@@ -1282,11 +1329,20 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 	writel_relaxed(val, csiphy->base +
 		       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, 6));
 
-	val = 0x02;
+	/*
+	 * The OPLUS common table writes 0x7a here; mainline's generic 0x02 is
+	 * the D-PHY value (it works for the D-PHY sensor on the same SoC).
+	 */
+	val = (cfg->csi2 && cfg->csi2->is_cphy) ? 0x7a : 0x02;
 	writel_relaxed(val, csiphy->base +
 		       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, 7));
 
-	val = 0x00;
+	/*
+	 * CTRL0 carries the reset-exit value: 0x0e for C-PHY (written by
+	 * csiphy_reset()), 0x00 for D-PHY.  Writing 0 here unconditionally
+	 * undid the C-PHY reset value straight away.
+	 */
+	val = (cfg->csi2 && cfg->csi2->is_cphy) ? 0x0e : 0x00;
 	writel_relaxed(val, csiphy->base +
 		       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, 0));
 
@@ -1294,7 +1350,7 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 	    csiphy->camss->res->version == CAMSS_8650) {
 		/* OPLUS csiphy_common_reg_2_2_0 (not otherwise written) */
 		writel_relaxed(0x00, csiphy->base + 0x1084);
-		writel_relaxed(0x01, csiphy->base + 0x108c);
+		writel_relaxed(0x00, csiphy->base + 0x108c);
 	}
 
 	if (csiphy_is_gen2(csiphy->camss->res->version))
@@ -1303,34 +1359,24 @@ static void csiphy_lanes_enable(struct csiphy_device *csiphy,
 		csiphy_gen1_config_lanes(csiphy, cfg, settle_cnt);
 
 	if (cfg->csi2 && cfg->csi2->is_cphy &&
-	    csiphy->camss->res->version == CAMSS_8650) {
-		dev_info(csiphy->camss->dev,
-			 "C-PHY lane_en=0x%02x ctrl 0x1004=%08x 0x1008=%08x 0x100c=%08x 0x1010=%08x 0x1018=%08x 0x101c=%08x 0x1084=%08x 0x108c=%08x\n",
-			 readl_relaxed(csiphy->base + 0x1014) & 0xff,
-			 readl_relaxed(csiphy->base + 0x1004),
-			 readl_relaxed(csiphy->base + 0x1008),
-			 readl_relaxed(csiphy->base + 0x100c),
-			 readl_relaxed(csiphy->base + 0x1010),
-			 readl_relaxed(csiphy->base + 0x1018),
-			 readl_relaxed(csiphy->base + 0x101c),
-			 readl_relaxed(csiphy->base + 0x1084),
-			 readl_relaxed(csiphy->base + 0x108c));
-		dev_info(csiphy->camss->dev,
-			 "C-PHY 3ph: 0x02f0=%08x 0x02f4=%08x 0x0264=%08x 0x0244=%08x 0x02bc=%08x 0x0260=%08x status 0x0340=%08x 0x0358=%08x\n",
-			 readl_relaxed(csiphy->base + 0x02f0),
-			 readl_relaxed(csiphy->base + 0x02f4),
-			 readl_relaxed(csiphy->base + 0x0264),
-			 readl_relaxed(csiphy->base + 0x0244),
-			 readl_relaxed(csiphy->base + 0x02bc),
-			 readl_relaxed(csiphy->base + 0x0260),
-			 readl_relaxed(csiphy->base + 0x0340),
-			 readl_relaxed(csiphy->base + 0x0358));
-	}
+	    csiphy->camss->res->version == CAMSS_8650)
+		dev_dbg(csiphy->camss->dev,
+			"C-PHY ctrl0=0x%02x lane_en=0x%02x ctrl7=0x%02x\n",
+			readl_relaxed(csiphy->base + 0x1000) & 0xff,
+			readl_relaxed(csiphy->base + 0x1014) & 0xff,
+			readl_relaxed(csiphy->base + 0x101c) & 0xff);
 
-	/* IRQ_MASK registers - disable all interrupts */
-	for (i = 11; i < 22; i++) {
-		writel_relaxed(0, csiphy->base +
-			       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, i));
+	/* IRQ_MASK registers: the OPLUS C-PHY values, otherwise all off */
+	{
+		static const u8 cphy_irq_mask[11] = {
+			0xff, 0xff, 0xfb, 0xff, 0x7f, 0xff, 0xff, 0xef,
+			0xff, 0xff, 0xff,
+		};
+		for (i = 11; i < 22; i++)
+			writel_relaxed((cfg->csi2 && cfg->csi2->is_cphy) ?
+				       cphy_irq_mask[i - 11] : 0,
+				       csiphy->base +
+				       CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, i));
 	}
 }
 
@@ -1340,43 +1386,9 @@ static void csiphy_lanes_disable(struct csiphy_device *csiphy,
 	struct csiphy_device_regs *regs = csiphy->regs;
 
 	if (csiphy->cfg.csi2 && csiphy->cfg.csi2->is_cphy &&
-	    csiphy->camss->res->version == CAMSS_8650) {
-		dev_info(csiphy->camss->dev, "C-PHY registers at stream stop:\n");
-		dev_info(csiphy->camss->dev,
-			 "  ctrl 0x1004=%08x 0x1008=%08x 0x100c=%08x 0x1010=%08x lane_en 0x1014=%08x\n",
-			 readl_relaxed(csiphy->base + 0x1004),
-			 readl_relaxed(csiphy->base + 0x1008),
-			 readl_relaxed(csiphy->base + 0x100c),
-			 readl_relaxed(csiphy->base + 0x1010),
-			 readl_relaxed(csiphy->base + 0x1014));
-		dev_info(csiphy->camss->dev,
-			 "  combo 0x1018=%08x 0x101c=%08x misc 0x1084=%08x 0x108c=%08x\n",
-			 readl_relaxed(csiphy->base + 0x1018),
-			 readl_relaxed(csiphy->base + 0x101c),
-			 readl_relaxed(csiphy->base + 0x1084),
-			 readl_relaxed(csiphy->base + 0x108c));
-		dev_info(csiphy->camss->dev,
-			 "  lane 0x02f0=%08x 0x02f4=%08x 0x0264=%08x 0x0244=%08x 0x0310=%08x 0x02bc=%08x 0x0260=%08x\n",
-			 readl_relaxed(csiphy->base + 0x02f0),
-			 readl_relaxed(csiphy->base + 0x02f4),
-			 readl_relaxed(csiphy->base + 0x0264),
-			 readl_relaxed(csiphy->base + 0x0244),
-			 readl_relaxed(csiphy->base + 0x0310),
-			 readl_relaxed(csiphy->base + 0x02bc),
-			 readl_relaxed(csiphy->base + 0x0260));
-		dev_info(csiphy->camss->dev,
-			 "  status 0x0340=%08x lanes 0x0358=%08x 0x0758=%08x 0x0b58=%08x\n",
-			 readl_relaxed(csiphy->base + 0x0340),
-			 readl_relaxed(csiphy->base + 0x0358),
-			 readl_relaxed(csiphy->base + 0x0758),
-			 readl_relaxed(csiphy->base + 0x0b58));
-		dev_info(csiphy->camss->dev,
-			 "  common_status 0x%04x=%08x\n",
-			 regs->offset + regs->common_status_offset,
-			 readl_relaxed(csiphy->base +
-				CSIPHY_3PH_CMN_CSI_COMMON_STATUSn(regs->offset,
-					regs->common_status_offset, 0)));
-	}
+	    csiphy->camss->res->version == CAMSS_8650)
+		dev_dbg(csiphy->camss->dev, "C-PHY stream stop, lane_en=0x%02x\n",
+			readl_relaxed(csiphy->base + 0x1014) & 0xff);
 
 	writel_relaxed(0, csiphy->base +
 			  CSIPHY_3PH_CMN_CSI_COMMON_CTRLn(regs->offset, 5));

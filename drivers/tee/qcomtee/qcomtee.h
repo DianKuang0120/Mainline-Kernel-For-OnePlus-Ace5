@@ -182,8 +182,4 @@ int qcomtee_mem_object_map(struct qcomtee_object *object,
 			   struct qcomtee_object **map_object, u64 *mem_paddr,
 			   u64 *mem_size, u32 *perms);
 
-/* (4) QSEECOM compatibility client (qseecom_compat.c). */
-void qcomtee_qseecom_compat_init(struct qcomtee *qtee);
-void qcomtee_qseecom_compat_exit(void);
-
 #endif /* QCOMTEE_H */
